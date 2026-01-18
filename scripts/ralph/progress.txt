@@ -154,3 +154,38 @@ Branch: ralph/gold-predictor-v2
 - Default config: 50%/30%/20% at 1x/2x/3x ATR
 - Breakeven move only happens when it improves the stop (no backwards movement)
 - TP level tracking persists until position is removed
+
+### Iteration 5 - US-001: Economic Calendar API Integration
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/data/economic_calendar.py` - Full EconomicCalendar class with:
+  - ImpactLevel enum (LOW, MEDIUM, HIGH, HOLIDAY)
+  - EconomicEvent dataclass with to_dict() serialization
+  - Forex Factory HTML scraping with fallback source
+  - High-impact keywords detection (Fed, CPI, NFP, GDP, etc.)
+  - Caching with configurable refresh interval
+  - Methods: fetch_events, get_upcoming_events, get_high_impact_events, is_near_high_impact_event
+- Updated `requirements.txt` - Added beautifulsoup4>=4.12.0 and lxml>=4.9.0
+- Updated `src/api/server.py`:
+  - Added EconomicCalendar import and global instance
+  - Added EconomicEventResponse and CalendarStatusResponse models
+  - Initialize EconomicCalendar in lifespan with initial fetch
+  - `/api/calendar` - Get events with filtering by hours_ahead and min_impact
+  - `/api/calendar/high-impact` - Get only high-impact events
+  - `/api/calendar/status` - Get calendar status and cache info
+  - `/api/calendar/refresh` - Force refresh events from source
+
+**Patterns Discovered:**
+- Forex Factory uses table with class="calendar__table"
+- Impact indicated by span class (high/red, medium/orange, low)
+- Date rows vs event rows - track current_date as state
+- Time format: 12-hour with am/pm or 24-hour
+- Fallback source: generate known scheduled events (NFP first Friday, etc.)
+
+**Notes:**
+- Calendar fetches on startup and caches for 60 minutes
+- Relevant currencies for gold: USD, EUR, GBP, JPY, CHF, CNY
+- HIGH_IMPACT_KEYWORDS list boosts events even if not marked high
+- is_near_high_impact_event() used for trading pause (US-002)
+

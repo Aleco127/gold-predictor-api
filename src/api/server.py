@@ -30,6 +30,7 @@ from ..trading import (
     PositionManager,
     TrailingStopUpdate,
 )
+from ..data.economic_calendar import EconomicCalendar, ImpactLevel
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -38,6 +39,7 @@ data_connector = None  # Either MT5Connector or CapitalConnector
 indicator_calculator: Optional[TechnicalIndicators] = None
 risk_manager: Optional[RiskManager] = None
 position_manager: Optional[PositionManager] = None
+economic_calendar: Optional[EconomicCalendar] = None
 
 
 class PredictionRequest(BaseModel):
@@ -236,6 +238,29 @@ class UpdateTrailingStopRequest(BaseModel):
     apply_to_broker: bool = True  # Whether to update stop-loss via API
 
 
+class EconomicEventResponse(BaseModel):
+    """Response model for a single economic event."""
+    datetime_utc: str
+    currency: str
+    impact: str
+    event_name: str
+    actual: Optional[str] = None
+    forecast: Optional[str] = None
+    previous: Optional[str] = None
+    is_high_impact: bool
+
+
+class CalendarStatusResponse(BaseModel):
+    """Response model for economic calendar status."""
+    events_cached: int
+    last_fetch: Optional[str] = None
+    cache_age_minutes: Optional[float] = None
+    refresh_interval_minutes: float
+    is_near_high_impact: bool
+    near_event: Optional[dict] = None
+    relevant_currencies: list
+
+
 # API Key security
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -270,7 +295,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar
 
     logger.info("Starting Gold Predictor API...")
 
@@ -359,6 +384,15 @@ async def lifespan(app: FastAPI):
             pip_value=0.01,  # Gold pip value
         )
         logger.info("Position manager initialized for trailing stops")
+
+        # Initialize economic calendar
+        economic_calendar = EconomicCalendar(
+            refresh_interval_minutes=60,
+            relevant_currencies=["USD", "EUR", "GBP", "JPY", "CHF", "CNY"],
+        )
+        # Fetch initial events
+        await economic_calendar.fetch_events()
+        logger.info("Economic calendar initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -1839,6 +1873,139 @@ async def move_stop_to_breakeven(
     return {
         **result,
         "broker_update": broker_result,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+# ============================================================================
+# Economic Calendar Endpoints
+# ============================================================================
+
+
+@app.get("/api/calendar")
+async def get_economic_calendar(
+    hours_ahead: int = 24,
+    min_impact: str = "low",
+    force_refresh: bool = False,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get upcoming economic calendar events.
+
+    Returns events filtered by time window and impact level.
+    Events are sorted by datetime.
+
+    Args:
+        hours_ahead: How many hours ahead to look (default: 24)
+        min_impact: Minimum impact level (low, medium, high)
+        force_refresh: Force fetch fresh events
+    """
+    global economic_calendar
+
+    if economic_calendar is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Economic calendar not initialized",
+        )
+
+    # Refresh events if requested
+    if force_refresh:
+        await economic_calendar.fetch_events(force=True)
+
+    # Map string to ImpactLevel
+    impact_map = {
+        "low": ImpactLevel.LOW,
+        "medium": ImpactLevel.MEDIUM,
+        "high": ImpactLevel.HIGH,
+    }
+    impact_level = impact_map.get(min_impact.lower(), ImpactLevel.LOW)
+
+    # Get filtered events
+    events = economic_calendar.get_upcoming_events(
+        hours_ahead=hours_ahead,
+        min_impact=impact_level,
+    )
+
+    # Convert to response format
+    event_list = [event.to_dict() for event in events]
+
+    return {
+        "events": event_list,
+        "count": len(event_list),
+        "hours_ahead": hours_ahead,
+        "min_impact": min_impact,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/calendar/high-impact")
+async def get_high_impact_events(
+    hours_ahead: int = 24,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get only high-impact economic events.
+
+    Convenience endpoint for quickly checking major events.
+    """
+    global economic_calendar
+
+    if economic_calendar is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Economic calendar not initialized",
+        )
+
+    events = economic_calendar.get_high_impact_events(hours_ahead=hours_ahead)
+    event_list = [event.to_dict() for event in events]
+
+    return {
+        "events": event_list,
+        "count": len(event_list),
+        "hours_ahead": hours_ahead,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/calendar/status", response_model=CalendarStatusResponse)
+async def get_calendar_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get economic calendar status.
+
+    Returns cache status, whether near high-impact event, and relevant currencies.
+    """
+    global economic_calendar
+
+    if economic_calendar is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Economic calendar not initialized",
+        )
+
+    status_data = economic_calendar.get_status()
+    return CalendarStatusResponse(**status_data)
+
+
+@app.post("/api/calendar/refresh")
+async def refresh_calendar(api_key: str = Depends(verify_api_key)):
+    """
+    Force refresh the economic calendar.
+
+    Fetches fresh events from the data source regardless of cache state.
+    """
+    global economic_calendar
+
+    if economic_calendar is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Economic calendar not initialized",
+        )
+
+    events = await economic_calendar.fetch_events(force=True)
+
+    return {
+        "refreshed": True,
+        "events_fetched": len(events),
         "timestamp": datetime.now().isoformat(),
     }
 
