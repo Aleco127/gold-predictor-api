@@ -417,3 +417,44 @@ Branch: ralph/gold-predictor-v2
 - Telegram chatId: 6074722648 (same as other workflows)
 - API uses format=telegram query param to get pre-formatted message
 
+### Iteration 12 - US-005: Multi-Timeframe Data Fetching
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/features/multi_timeframe.py`:
+  - TimeframeData dataclass with:
+    - Raw data (pandas DataFrame)
+    - Calculated indicators DataFrame
+    - Key indicator values: EMA 9/21/50, RSI, MACD, ATR, Bollinger Bands
+    - Derived signals: trend_direction, ema_alignment, rsi_condition, price_vs_bb
+    - to_dict() for JSON serialization
+  - MultiTimeframeAnalysis dataclass with:
+    - Symbol, timeframes dict, analysis_time
+    - Confluence metrics placeholder (for US-006)
+    - to_dict() for JSON serialization
+  - MultiTimeframeAnalyzer class:
+    - Configurable timeframes (default: M5, M15, H1, H4)
+    - 200 bars per timeframe
+    - Caching with timeframe-appropriate validity (M5: 2min, H1: 20min, H4: 1hr)
+    - analyze() method fetches and analyzes all timeframes
+    - _analyze_timeframe() fetches single timeframe, calculates indicators
+    - _calculate_signals() derives trend direction, EMA alignment, RSI condition
+    - get_summary() returns quick overview of all timeframes
+    - get_status() returns analyzer configuration
+- Updated `src/features/__init__.py`:
+  - Exported MultiTimeframeAnalyzer, MultiTimeframeAnalysis, TimeframeData
+
+**Patterns Discovered:**
+- Cache validity varies by timeframe: faster timeframes expire sooner
+- Days needed calculation: bars_needed / bars_per_day for each timeframe
+- Trend direction based on EMA stacking: EMA_9 > EMA_21 > EMA_50 = BULLISH
+- RSI conditions: >70 OVERBOUGHT, <30 OVERSOLD, else NEUTRAL
+- Price vs Bollinger Bands: ABOVE_UPPER, BELOW_LOWER, or MIDDLE
+
+**Notes:**
+- Uses existing Capital.com connector's get_historical_data method
+- Leverages TechnicalIndicators class for calculations
+- Fallback to cached data on fetch errors
+- Summary shows bullish/bearish/neutral counts across timeframes
+- Overall trend = majority of timeframes agree
+
