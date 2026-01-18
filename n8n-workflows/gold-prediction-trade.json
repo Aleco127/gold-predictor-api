@@ -3,6 +3,45 @@
   "nodes": [
     {
       "parameters": {
+        "jsCode": "// Check if XAUUSD market is open\n// Gold trades Sunday 22:00 UTC to Friday 22:00 UTC\n// Daily maintenance break around 21:00-22:00 UTC\n\nconst now = new Date();\nconst dayOfWeek = now.getUTCDay(); // 0=Sunday, 6=Saturday\nconst hour = now.getUTCHours();\n\nlet isOpen = true;\nlet reason = \"\";\n\n// Saturday: market closed all day\nif (dayOfWeek === 6) {\n    isOpen = false;\n    reason = \"Market closed - Saturday\";\n}\n// Sunday: market opens at 22:00 UTC\nelse if (dayOfWeek === 0 && hour < 22) {\n    isOpen = false;\n    reason = \"Market closed - Sunday before 22:00 UTC\";\n}\n// Friday: market closes at 22:00 UTC\nelse if (dayOfWeek === 5 && hour >= 22) {\n    isOpen = false;\n    reason = \"Market closed - Friday after 22:00 UTC\";\n}\n// Daily maintenance break 21:00-22:00 UTC\nelse if (hour === 21) {\n    isOpen = false;\n    reason = \"Daily maintenance break (21:00-22:00 UTC)\";\n}\n\nreturn [{\n    json: {\n        market_open: isOpen,\n        reason: reason,\n        current_time_utc: now.toISOString(),\n        day_of_week: [\"Sunday\", \"Monday\", \"Tuesday\", \"Wednesday\", \"Thursday\", \"Friday\", \"Saturday\"][dayOfWeek]\n    }\n}];"
+      },
+      "id": "market-hours-check",
+      "name": "Check Market Hours",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1100, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-market-open",
+              "leftValue": "={{ $json.market_open }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "market-open-check",
+      "name": "Market Open?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-900, 200]
+    },
+    {
+      "parameters": {
         "rule": {
           "interval": [
             {
@@ -16,12 +55,12 @@
       "name": "Every 5 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.1,
-      "position": [-900, 200]
+      "position": [-1300, 200]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$env.GOLD_PREDICTOR_URL || 'http://gold-predictor:8000'}}/predict-and-trade",
+        "url": "http://gold-predictor:8000/predict-and-trade",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -40,7 +79,7 @@
           "parameters": [
             {
               "name": "X-API-Key",
-              "value": "={{$env.GOLD_PREDICTOR_API_KEY}}"
+              "value": "gp_sk_live_2026_gold_predictor_secure"
             },
             {
               "name": "Content-Type",
@@ -118,7 +157,7 @@
     },
     {
       "parameters": {
-        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "chatId": "6074722648",
         "text": "=\ud83d\udcb0 **GOLD TRADE EXECUTED** \ud83d\udcb0\n\n\u2705 Trade Status: SUCCESS\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\n**Trade Details:**\n\ud83d\udd39 Direction: {{$json.trade.direction}}\n\ud83d\udd39 Size: {{$json.trade.size}} lots\n\ud83d\udd39 Entry: ${{$json.trade.level ? $json.trade.level.toFixed(2) : 'N/A'}}\n\ud83d\udd39 Stop Loss: ${{$json.trade.stop_loss ? $json.trade.stop_loss.toFixed(2) : 'N/A'}}\n\ud83d\udd39 Take Profit: ${{$json.trade.take_profit ? $json.trade.take_profit.toFixed(2) : 'N/A'}}\n\n**Price Info:**\n\ud83d\udcb5 Current: ${{$json.prediction.current_price.toFixed(2)}}\n\ud83c\udfaf Predicted: ${{$json.prediction.predicted_price.toFixed(2)}}\n\n\ud83c\udd94 Deal ID: {{$json.trade.deal_id || 'N/A'}}\n\u23f0 {{new Date().toLocaleString()}}",
         "additionalFields": {
           "parse_mode": "Markdown"
@@ -128,11 +167,17 @@
       "name": "Send Trade Alert",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.1,
-      "position": [60, 0]
+      "position": [60, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "TradingBotCred01",
+          "name": "Telegram Trading Bot"
+        }
+      }
     },
     {
       "parameters": {
-        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "chatId": "6074722648",
         "text": "=\u26a0\ufe0f **GOLD TRADE FAILED** \u26a0\ufe0f\n\n\u274c Trade Status: FAILED\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\n**Error:** {{$json.trade.error || 'Unknown error'}}\n\n**Price Info:**\n\ud83d\udcb5 Current: ${{$json.prediction.current_price.toFixed(2)}}\n\ud83c\udfaf Predicted: ${{$json.prediction.predicted_price.toFixed(2)}}\n\n\u23f0 {{new Date().toLocaleString()}}",
         "additionalFields": {
           "parse_mode": "Markdown"
@@ -142,7 +187,13 @@
       "name": "Trade Failed Alert",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.1,
-      "position": [60, 200]
+      "position": [60, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "TradingBotCred01",
+          "name": "Telegram Trading Bot"
+        }
+      }
     },
     {
       "parameters": {
@@ -175,7 +226,7 @@
     },
     {
       "parameters": {
-        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "chatId": "6074722648",
         "text": "=\ud83e\udd47 **GOLD STRONG SIGNAL** (No Trade)\n\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\n\ud83d\udcb5 Current: ${{$json.prediction.current_price.toFixed(2)}}\n\ud83c\udfaf Predicted: ${{$json.prediction.predicted_price.toFixed(2)}}\n\n\u2139\ufe0f Trade not executed (confidence below threshold)\n\n\u23f0 {{new Date().toLocaleString()}}",
         "additionalFields": {
           "parse_mode": "Markdown"
@@ -185,11 +236,17 @@
       "name": "Strong Signal Alert",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.1,
-      "position": [60, 300]
+      "position": [60, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TradingBotCred01",
+          "name": "Telegram Trading Bot"
+        }
+      }
     },
     {
       "parameters": {
-        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "chatId": "6074722648",
         "text": "=\ud83e\udd47 Gold Signal (No Trade)\n\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\ud83d\udcb5 Price: ${{$json.prediction.current_price.toFixed(2)}}\n\n\u2139\ufe0f Trade not executed\n\n\u23f0 {{new Date().toLocaleString()}}",
         "additionalFields": {}
       },
@@ -197,7 +254,13 @@
       "name": "Normal Signal Alert",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.1,
-      "position": [60, 480]
+      "position": [60, 480],
+      "credentials": {
+        "telegramApi": {
+          "id": "TradingBotCred01",
+          "name": "Telegram Trading Bot"
+        }
+      }
     },
     {
       "parameters": {},
@@ -217,9 +280,18 @@
           },
           "conditions": [
             {
-              "id": "check-buy-sell",
+              "id": "check-buy",
               "leftValue": "={{$json.prediction.signal}}",
               "rightValue": "BUY",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "check-sell",
+              "leftValue": "={{$json.prediction.signal}}",
+              "rightValue": "SELL",
               "operator": {
                 "type": "string",
                 "operation": "contains"
@@ -242,11 +314,34 @@
       "main": [
         [
           {
-            "node": "Predict & Trade",
+            "node": "Check Market Hours",
             "type": "main",
             "index": 0
           }
         ]
+      ]
+    },
+    "Check Market Hours": {
+      "main": [
+        [
+          {
+            "node": "Market Open?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Market Open?": {
+      "main": [
+        [
+          {
+            "node": "Predict & Trade",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     },
     "Predict & Trade": {
