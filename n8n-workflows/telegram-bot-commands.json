@@ -1,0 +1,899 @@
+{
+  "name": "Gold Bot - Telegram Commands",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "webhookId": "gold-bot-commands",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "command-check",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-command",
+      "name": "Is Command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse command and arguments\nconst text = $input.first().json.message.text || '';\nconst parts = text.trim().split(/\\s+/);\nconst command = parts[0].toLowerCase();\nconst args = parts.slice(1);\n\nreturn {\n  json: {\n    command: command,\n    args: args,\n    chat_id: $input.first().json.message.chat.id,\n    user: $input.first().json.message.from.first_name || 'User',\n    full_text: text\n  }\n};"
+      },
+      "id": "parse-command",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/config",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "config"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/enable",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "enable"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/disable",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "disable"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/set",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "set"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/report",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "report"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/performance",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "performance"
+            }
+          ],
+          "fallbackOutput": {
+            "renameOutput": true,
+            "outputKey": "unknown"
+          }
+        },
+        "options": {}
+      },
+      "id": "route-command",
+      "name": "Route Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/bot/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-status",
+      "name": "Get Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, -400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/bot/config",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-config",
+      "name": "Get Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, -200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/bot/trading/enable",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "enable-trading",
+      "name": "Enable Trading",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/bot/trading/disable",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "disable-trading",
+      "name": "Disable Trading",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse /set command arguments\nconst args = $input.first().json.args;\nconst chat_id = $input.first().json.chat_id;\n\nif (args.length < 2) {\n  return {\n    json: {\n      error: true,\n      message: '❌ Uso: /set <parametro> <valor>\\n\\nEjemplos:\\n/set daily_loss 2.5\\n/set max_trades 30\\n/set position_size 0.02',\n      chat_id: chat_id\n    }\n  };\n}\n\nconst param = args[0].toLowerCase();\nconst value = parseFloat(args[1]);\n\nif (isNaN(value)) {\n  return {\n    json: {\n      error: true,\n      message: `❌ Valor inválido: ${args[1]}`,\n      chat_id: chat_id\n    }\n  };\n}\n\n// Map friendly names to API fields\nconst paramMap = {\n  'daily_loss': 'daily_loss_limit_pct',\n  'loss_limit': 'daily_loss_limit_pct',\n  'max_trades': 'max_daily_trades',\n  'balance': 'account_balance',\n  'position_size': 'base_position_size',\n  'base_size': 'base_position_size',\n  'max_position': 'max_position_size',\n  'min_position': 'min_position_size',\n  'trailing': 'trailing_atr_multiplier',\n  'trailing_atr': 'trailing_atr_multiplier',\n  'activation': 'trailing_activation_pips',\n  'step': 'trailing_step_pips',\n  'confidence': 'confidence_threshold'\n};\n\nconst apiField = paramMap[param];\n\nif (!apiField) {\n  return {\n    json: {\n      error: true,\n      message: `❌ Parámetro desconocido: ${param}\\n\\nParámetros válidos:\\n• daily_loss\\n• max_trades\\n• balance\\n• position_size\\n• max_position\\n• trailing\\n• activation\\n• confidence`,\n      chat_id: chat_id\n    }\n  };\n}\n\nreturn {\n  json: {\n    error: false,\n    api_field: apiField,\n    value: value,\n    param_name: param,\n    chat_id: chat_id\n  }\n};"
+      },
+      "id": "parse-set-command",
+      "name": "Parse Set Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "error-check",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "set-has-error",
+      "name": "Has Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 400]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/bot/config",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ [$json.api_field]: $json.value }) }}",
+        "options": {}
+      },
+      "id": "update-config",
+      "name": "Update Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/bot/help",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-help",
+      "name": "Get Help",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/daily-report?format=telegram",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-report",
+      "name": "Get Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 800],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GOLD_PREDICTOR_URL }}/api/performance?period=7d",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-performance",
+      "name": "Get Performance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 1000],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api-key",
+          "name": "Gold Predictor API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format status for Telegram\nconst data = $input.first().json;\nconst chat_id = $('Parse Command').first().json.chat_id;\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: `🤖 **GOLD BOT STATUS**\\n\\n${data.status_text}`\n  }\n};"
+      },
+      "id": "format-status",
+      "name": "Format Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, -400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format config for Telegram\nconst c = $input.first().json;\nconst chat_id = $('Parse Command').first().json.chat_id;\n\nconst message = `⚙️ **CONFIGURACIÓN ACTUAL**\n\n📊 **Risk Management**\n• Límite pérdida diaria: ${c.daily_loss_limit_pct}%\n• Máx trades/día: ${c.max_daily_trades}\n• Balance cuenta: $${c.account_balance.toLocaleString()}\n\n📏 **Position Sizing**\n• Tamaño base: ${c.base_position_size} lots\n• Tamaño máximo: ${c.max_position_size} lots\n• Tamaño mínimo: ${c.min_position_size} lots\n\n🎯 **Trailing Stop**\n• ATR multiplier: ${c.trailing_atr_multiplier}x\n• Activación: ${c.trailing_activation_pips} pips\n• Step: ${c.trailing_step_pips} pips\n\n🤖 **Trading**\n• Habilitado: ${c.trading_enabled ? '✅ Sí' : '❌ No'}\n• Umbral confianza: ${(c.confidence_threshold * 100).toFixed(0)}%\n\n📈 **Estado Hoy**\n• P&L: $${c.current_daily_pnl.toFixed(2)}\n• Trades: ${c.trades_today}\n• Trading permitido: ${c.trading_allowed ? '✅' : '❌'}`;\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: message\n  }\n};"
+      },
+      "id": "format-config",
+      "name": "Format Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format enable/disable response\nconst data = $input.first().json;\nconst chat_id = $('Parse Command').first().json.chat_id;\n\nconst emoji = data.trading_enabled ? '🟢' : '🔴';\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: `${emoji} ${data.message}`\n  }\n};"
+      },
+      "id": "format-toggle",
+      "name": "Format Toggle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format update response\nconst data = $input.first().json;\nconst chat_id = $('Parse Command').first().json.chat_id;\nconst param = $('Parse Set Command').first().json.param_name;\nconst value = $('Parse Set Command').first().json.value;\n\nlet message;\nif (data.success && data.changes_count > 0) {\n  message = `✅ **Configuración actualizada**\\n\\n${data.changes.join('\\n')}`;\n} else {\n  message = `⚠️ No se realizaron cambios`;\n}\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: message\n  }\n};"
+      },
+      "id": "format-update",
+      "name": "Format Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format help for Telegram\nconst data = $input.first().json;\nconst chat_id = $('Parse Command').first().json.chat_id;\n\nlet commandsList = Object.entries(data.commands)\n  .map(([cmd, desc]) => `• ${cmd} - ${desc}`)\n  .join('\\n');\n\nlet examplesList = data.examples.join('\\n');\n\nconst message = `📚 **COMANDOS DISPONIBLES**\\n\\n${commandsList}\\n\\n💡 **Ejemplos:**\\n${examplesList}`;\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: message\n  }\n};"
+      },
+      "id": "format-help",
+      "name": "Format Help",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format report for Telegram\nconst data = $input.first().json;\nconst chat_id = $('Parse Command').first().json.chat_id;\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: data.telegram_message || data.message || '📊 Reporte no disponible'\n  }\n};"
+      },
+      "id": "format-report",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 800]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format performance for Telegram\nconst p = $input.first().json;\nconst chat_id = $('Parse Command').first().json.chat_id;\n\nconst message = `📈 **RENDIMIENTO (7 días)**\n\n💰 **P&L**\n• Total: $${(p.total_pnl || 0).toFixed(2)}\n• Trades: ${p.total_trades || 0}\n\n📊 **Métricas**\n• Win Rate: ${((p.win_rate || 0) * 100).toFixed(1)}%\n• Profit Factor: ${(p.profit_factor || 0).toFixed(2)}\n• Sharpe Ratio: ${(p.sharpe_ratio || 0).toFixed(2)}\n\n📉 **Riesgo**\n• Max Drawdown: ${((p.max_drawdown_pct || 0)).toFixed(1)}%\n• Expectancy: $${(p.expectancy || 0).toFixed(2)}/trade`;\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: message\n  }\n};"
+      },
+      "id": "format-performance",
+      "name": "Format Performance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 1000]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format unknown command\nconst chat_id = $input.first().json.chat_id;\nconst command = $input.first().json.command;\n\nreturn {\n  json: {\n    chat_id: chat_id,\n    message: `❓ Comando desconocido: ${command}\\n\\nEscribe /help para ver los comandos disponibles.`\n  }\n};"
+      },
+      "id": "format-unknown",
+      "name": "Format Unknown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 1200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pass through error message\nconst data = $input.first().json;\n\nreturn {\n  json: {\n    chat_id: data.chat_id,\n    message: data.message\n  }\n};"
+      },
+      "id": "format-set-error",
+      "name": "Format Set Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-telegram",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1760, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Is Command?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Command?": {
+      "main": [
+        [
+          {
+            "node": "Parse Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Command": {
+      "main": [
+        [
+          {
+            "node": "Route Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Command": {
+      "main": [
+        [
+          {
+            "node": "Get Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enable Trading",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Disable Trading",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Set Command",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Help",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Performance",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Unknown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Status": {
+      "main": [
+        [
+          {
+            "node": "Format Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Config": {
+      "main": [
+        [
+          {
+            "node": "Format Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enable Trading": {
+      "main": [
+        [
+          {
+            "node": "Format Toggle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Disable Trading": {
+      "main": [
+        [
+          {
+            "node": "Format Toggle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Set Command": {
+      "main": [
+        [
+          {
+            "node": "Has Error?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Error?": {
+      "main": [
+        [
+          {
+            "node": "Format Set Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Config": {
+      "main": [
+        [
+          {
+            "node": "Format Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Help": {
+      "main": [
+        [
+          {
+            "node": "Format Help",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Report": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Performance": {
+      "main": [
+        [
+          {
+            "node": "Format Performance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Status": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Config": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Toggle": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Set Error": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Update": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Help": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Performance": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Unknown": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "gold-predictor"
+    },
+    {
+      "name": "telegram"
+    }
+  ],
+  "pinData": {}
+}

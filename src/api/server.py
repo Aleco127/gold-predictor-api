@@ -61,6 +61,10 @@ mtf_analyzer: Optional[MultiTimeframeAnalyzer] = None
 historical_store: Optional[HistoricalDataStore] = None
 backtest_engine: Optional[BacktestEngine] = None
 
+# Runtime configuration (can be modified via API)
+trading_enabled: bool = True
+confidence_threshold: float = 0.7
+
 
 class PredictionRequest(BaseModel):
     """Request model for predictions."""
@@ -196,6 +200,45 @@ class PositionSizingConfigResponse(BaseModel):
     volatility_high_threshold: float
     volatility_low_threshold: float
     volatility_lookback: int
+
+
+class BotConfigResponse(BaseModel):
+    """Response model for full bot configuration (Telegram-friendly)."""
+    # Risk Management
+    daily_loss_limit_pct: float
+    max_daily_trades: int
+    account_balance: float
+    # Position Sizing
+    base_position_size: float
+    max_position_size: float
+    min_position_size: float
+    # Trailing Stop
+    trailing_atr_multiplier: float
+    trailing_activation_pips: float
+    trailing_step_pips: float
+    # Trading
+    trading_enabled: bool
+    confidence_threshold: float
+    # Status
+    current_daily_pnl: float
+    trades_today: int
+    trading_allowed: bool
+
+
+class BotConfigUpdateRequest(BaseModel):
+    """Request model for updating bot configuration via Telegram."""
+    # All fields optional - only update what's provided
+    daily_loss_limit_pct: Optional[float] = Field(None, ge=0.5, le=10.0)
+    max_daily_trades: Optional[int] = Field(None, ge=1, le=100)
+    account_balance: Optional[float] = Field(None, ge=100)
+    base_position_size: Optional[float] = Field(None, ge=0.01, le=1.0)
+    max_position_size: Optional[float] = Field(None, ge=0.01, le=1.0)
+    min_position_size: Optional[float] = Field(None, ge=0.01, le=1.0)
+    trailing_atr_multiplier: Optional[float] = Field(None, ge=0.5, le=5.0)
+    trailing_activation_pips: Optional[float] = Field(None, ge=1, le=100)
+    trailing_step_pips: Optional[float] = Field(None, ge=1, le=50)
+    trading_enabled: Optional[bool] = None
+    confidence_threshold: Optional[float] = Field(None, ge=0.5, le=0.99)
 
 
 class TrackedPositionResponse(BaseModel):
@@ -1199,6 +1242,266 @@ async def update_account_balance(
         "new_balance": balance,
         "new_daily_limit": risk_manager.daily_loss_limit,
         "timestamp": datetime.now().isoformat(),
+    }
+
+
+# =============================================================================
+# BOT CONFIGURATION ENDPOINTS (for Telegram control)
+# =============================================================================
+
+
+@app.get("/api/bot/config", response_model=BotConfigResponse)
+async def get_bot_config(api_key: str = Depends(verify_api_key)):
+    """
+    Get current bot configuration for Telegram display.
+
+    Returns all configurable parameters in a Telegram-friendly format.
+    """
+    global risk_manager, position_manager, trading_enabled, confidence_threshold
+
+    if risk_manager is None or position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Bot not fully initialized",
+        )
+
+    daily_stats = risk_manager.get_daily_stats()
+    can_trade, _ = risk_manager.can_trade()
+
+    return BotConfigResponse(
+        # Risk Management
+        daily_loss_limit_pct=risk_manager.daily_loss_limit_pct,
+        max_daily_trades=risk_manager.max_daily_trades,
+        account_balance=risk_manager.account_balance,
+        # Position Sizing
+        base_position_size=risk_manager.base_position_size,
+        max_position_size=risk_manager.max_position_size,
+        min_position_size=risk_manager.min_position_size,
+        # Trailing Stop
+        trailing_atr_multiplier=position_manager.trailing_atr_multiplier,
+        trailing_activation_pips=position_manager.activation_pips,
+        trailing_step_pips=position_manager.step_pips,
+        # Trading
+        trading_enabled=trading_enabled,
+        confidence_threshold=confidence_threshold,
+        # Status
+        current_daily_pnl=daily_stats.total_pnl,
+        trades_today=daily_stats.trade_count,
+        trading_allowed=can_trade and trading_enabled,
+    )
+
+
+@app.put("/api/bot/config")
+async def update_bot_config(
+    request: BotConfigUpdateRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Update bot configuration via Telegram commands.
+
+    Only updates fields that are provided in the request.
+    Returns the updated configuration and what was changed.
+    """
+    global risk_manager, position_manager, trading_enabled, confidence_threshold
+
+    if risk_manager is None or position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Bot not fully initialized",
+        )
+
+    changes = []
+
+    # Update Risk Manager settings
+    if request.daily_loss_limit_pct is not None:
+        old = risk_manager.daily_loss_limit_pct
+        risk_manager.daily_loss_limit_pct = request.daily_loss_limit_pct
+        risk_manager.daily_loss_limit = risk_manager.account_balance * (request.daily_loss_limit_pct / 100)
+        changes.append(f"daily_loss_limit: {old}% → {request.daily_loss_limit_pct}%")
+
+    if request.max_daily_trades is not None:
+        old = risk_manager.max_daily_trades
+        risk_manager.max_daily_trades = request.max_daily_trades
+        changes.append(f"max_daily_trades: {old} → {request.max_daily_trades}")
+
+    if request.account_balance is not None:
+        old = risk_manager.account_balance
+        risk_manager.update_account_balance(request.account_balance)
+        changes.append(f"account_balance: ${old:,.2f} → ${request.account_balance:,.2f}")
+
+    if request.base_position_size is not None:
+        old = risk_manager.base_position_size
+        risk_manager.base_position_size = request.base_position_size
+        changes.append(f"base_position_size: {old} → {request.base_position_size} lots")
+
+    if request.max_position_size is not None:
+        old = risk_manager.max_position_size
+        risk_manager.max_position_size = request.max_position_size
+        changes.append(f"max_position_size: {old} → {request.max_position_size} lots")
+
+    if request.min_position_size is not None:
+        old = risk_manager.min_position_size
+        risk_manager.min_position_size = request.min_position_size
+        changes.append(f"min_position_size: {old} → {request.min_position_size} lots")
+
+    # Update Position Manager settings
+    if request.trailing_atr_multiplier is not None:
+        old = position_manager.trailing_atr_multiplier
+        position_manager.trailing_atr_multiplier = request.trailing_atr_multiplier
+        changes.append(f"trailing_atr_multiplier: {old}x → {request.trailing_atr_multiplier}x")
+
+    if request.trailing_activation_pips is not None:
+        old = position_manager.activation_pips
+        position_manager.activation_pips = request.trailing_activation_pips
+        changes.append(f"trailing_activation_pips: {old} → {request.trailing_activation_pips}")
+
+    if request.trailing_step_pips is not None:
+        old = position_manager.step_pips
+        position_manager.step_pips = request.trailing_step_pips
+        changes.append(f"trailing_step_pips: {old} → {request.trailing_step_pips}")
+
+    # Update global trading settings
+    if request.trading_enabled is not None:
+        old = trading_enabled
+        trading_enabled = request.trading_enabled
+        changes.append(f"trading_enabled: {old} → {request.trading_enabled}")
+
+    if request.confidence_threshold is not None:
+        old = confidence_threshold
+        confidence_threshold = request.confidence_threshold
+        changes.append(f"confidence_threshold: {old} → {request.confidence_threshold}")
+
+    logger.info(f"Bot config updated: {changes}")
+
+    return {
+        "success": True,
+        "changes": changes,
+        "changes_count": len(changes),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/bot/trading/{action}")
+async def toggle_trading(
+    action: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Quick toggle for trading status.
+
+    Actions: "enable", "disable", "toggle"
+    """
+    global trading_enabled
+
+    if action == "enable":
+        trading_enabled = True
+        message = "Trading ENABLED"
+    elif action == "disable":
+        trading_enabled = False
+        message = "Trading DISABLED"
+    elif action == "toggle":
+        trading_enabled = not trading_enabled
+        message = f"Trading {'ENABLED' if trading_enabled else 'DISABLED'}"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid action: {action}. Use 'enable', 'disable', or 'toggle'",
+        )
+
+    logger.info(f"Trading status changed: {message}")
+
+    return {
+        "success": True,
+        "trading_enabled": trading_enabled,
+        "message": message,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/bot/status")
+async def get_bot_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get quick bot status for Telegram.
+
+    Returns essential status info in a format ready for Telegram message.
+    """
+    global risk_manager, position_manager, trading_enabled, predictor
+
+    status_parts = []
+
+    # Trading status
+    if trading_enabled:
+        status_parts.append("🟢 Trading: ACTIVE")
+    else:
+        status_parts.append("🔴 Trading: DISABLED")
+
+    # Risk status
+    if risk_manager:
+        daily_stats = risk_manager.get_daily_stats()
+        can_trade, reason = risk_manager.can_trade()
+
+        pnl_emoji = "📈" if daily_stats.total_pnl >= 0 else "📉"
+        status_parts.append(f"{pnl_emoji} Daily P&L: ${daily_stats.total_pnl:,.2f}")
+        status_parts.append(f"📊 Trades: {daily_stats.trade_count}/{risk_manager.max_daily_trades}")
+
+        if not can_trade:
+            status_parts.append(f"⚠️ Blocked: {reason}")
+
+    # Model status
+    if predictor and predictor.is_loaded:
+        status_parts.append("🤖 Model: Loaded")
+    else:
+        status_parts.append("⚠️ Model: Not loaded")
+
+    # Positions
+    if position_manager:
+        active = len(position_manager.tracked_positions)
+        status_parts.append(f"📍 Positions: {active}")
+
+    return {
+        "status_text": "\n".join(status_parts),
+        "trading_enabled": trading_enabled,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/bot/help")
+async def get_bot_help(api_key: str = Depends(verify_api_key)):
+    """
+    Get available Telegram commands.
+    """
+    commands = {
+        "/status": "Ver estado actual del bot",
+        "/config": "Ver configuración actual",
+        "/enable": "Activar trading",
+        "/disable": "Desactivar trading",
+        "/set <param> <value>": "Cambiar configuración",
+        "/report": "Ver reporte diario",
+        "/positions": "Ver posiciones abiertas",
+        "/performance": "Ver métricas de rendimiento",
+    }
+
+    examples = [
+        "/set daily_loss 2.5",
+        "/set max_trades 30",
+        "/set position_size 0.02",
+        "/set trailing 2.0",
+    ]
+
+    params_help = {
+        "daily_loss": "Límite pérdida diaria (%) - Rango: 0.5-10",
+        "max_trades": "Máx trades por día - Rango: 1-100",
+        "position_size": "Tamaño base (lots) - Rango: 0.01-1.0",
+        "max_position": "Tamaño máximo (lots) - Rango: 0.01-1.0",
+        "trailing": "Trailing stop ATR multiplier - Rango: 0.5-5.0",
+        "activation": "Pips para activar trailing - Rango: 1-100",
+        "confidence": "Umbral confianza señales - Rango: 0.5-0.99",
+    }
+
+    return {
+        "commands": commands,
+        "examples": examples,
+        "parameters": params_help,
     }
 
 
