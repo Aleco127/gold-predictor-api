@@ -498,3 +498,57 @@ Branch: ralph/gold-predictor-v2
 - Confluence can be used to adjust position sizing or skip low-confidence trades
 - Cached data used for summary endpoint for faster response
 
+### Iteration 14 - US-014: Historical Data Storage
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/storage/historical_data.py`:
+  - DataRangeInfo dataclass with:
+    - symbol, timeframe, start_date, end_date, total_bars
+    - file_path, file_size_mb, last_updated
+    - to_dict() with days_of_data calculation
+  - HistoricalDataStore class:
+    - Parquet format storage with pyarrow/snappy compression
+    - download_historical() - chunked downloads (30 days per chunk) with progress callback
+    - save() - save DataFrame to Parquet, optional append mode
+    - load() - load with date filtering and column selection
+    - update() - incremental update with existing data merge
+    - get_data_info() - returns DataRangeInfo for stored data
+    - list_available_data() - lists all stored parquet files
+    - delete() - removes stored data file
+    - get_status() - returns storage status and available data
+  - download_full_history() convenience function
+- Updated `src/storage/__init__.py`:
+  - Exported HistoricalDataStore, DataRangeInfo, download_full_history
+- Created `scripts/update_historical.py`:
+  - CLI script for daily data updates
+  - Arguments: --symbol, --timeframe, --days, --update-days, --full, --multiple-timeframes
+  - setup_logging() with daily log rotation
+  - create_data_connector() for Capital.com connection
+  - download_initial_data() for full downloads
+  - update_existing_data() for incremental updates
+  - Progress callback for download status
+- Updated `src/api/server.py`:
+  - Added HistoricalDataStore import and global instance
+  - Initialized historical_store in lifespan
+  - GET `/api/historical` - List all stored data
+  - GET `/api/historical/{symbol}/{timeframe}` - Get specific data info
+  - POST `/api/historical/download` - Download historical data (symbol, timeframe, days)
+  - POST `/api/historical/update` - Update existing data (symbol, timeframe, days)
+  - DELETE `/api/historical/{symbol}/{timeframe}` - Delete stored data
+
+**Patterns Discovered:**
+- Parquet with snappy compression ideal for OHLCV time series
+- Chunked downloads prevent API rate limiting (30 days per chunk)
+- Time column detection: 'time' or 'datetime' depending on source
+- Duplicate handling: drop_duplicates on time column, sort by time
+- File naming: {symbol}_{timeframe}.parquet (e.g., XAUUSD_M5.parquet)
+
+**Notes:**
+- Default data directory: data/historical/
+- Supported timeframes: M1, M5, M15, M30, H1, H4, D1
+- Downloads support progress callback for UI feedback
+- Date filtering in load() handles both timezone-aware and naive timestamps
+- Script designed for cron/Task Scheduler daily execution
+- --multiple-timeframes flag downloads M5, M15, H1, H4 together
+

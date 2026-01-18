@@ -36,6 +36,7 @@ from ..features.sentiment_analyzer import SentimentAnalyzer, AggregateSentiment
 from ..storage.trade_database import TradeDatabase, TradeFilter, TradeSummary
 from ..monitoring.performance_tracker import TradingPerformanceTracker, PerformanceMetrics, DrawdownInfo
 from ..features.multi_timeframe import MultiTimeframeAnalyzer, MultiTimeframeAnalysis, TimeframeData
+from ..storage.historical_data import HistoricalDataStore, DataRangeInfo
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -51,6 +52,7 @@ sentiment_analyzer: Optional[SentimentAnalyzer] = None
 trade_db: Optional[TradeDatabase] = None
 trading_performance_tracker: Optional[TradingPerformanceTracker] = None
 mtf_analyzer: Optional[MultiTimeframeAnalyzer] = None
+historical_store: Optional[HistoricalDataStore] = None
 
 
 class PredictionRequest(BaseModel):
@@ -306,7 +308,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer, trade_db, trading_performance_tracker, mtf_analyzer
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer, trade_db, trading_performance_tracker, mtf_analyzer, historical_store
 
     logger.info("Starting Gold Predictor API...")
 
@@ -451,6 +453,13 @@ async def lifespan(app: FastAPI):
             bars_per_timeframe=200,
         )
         logger.info("Multi-timeframe analyzer initialized")
+
+        # Initialize historical data store (US-014)
+        historical_store = HistoricalDataStore(
+            data_dir=Path("data/historical"),
+            data_connector=data_connector,
+        )
+        logger.info("Historical data store initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -3380,6 +3389,188 @@ async def get_mtf_status(
         )
 
     return mtf_analyzer.get_status()
+
+
+# ============================================================================
+# HISTORICAL DATA ENDPOINTS (US-014)
+# ============================================================================
+
+@app.get("/api/historical")
+async def get_historical_info(
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get information about stored historical data.
+
+    Returns list of all available data files with date ranges.
+    """
+    global historical_store
+
+    if historical_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Historical data store not initialized",
+        )
+
+    return historical_store.get_status()
+
+
+@app.get("/api/historical/{symbol}/{timeframe}")
+async def get_historical_data_info(
+    symbol: str,
+    timeframe: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get information about specific symbol/timeframe data.
+
+    Returns date range, bar count, and file size.
+    """
+    global historical_store
+
+    if historical_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Historical data store not initialized",
+        )
+
+    info = historical_store.get_data_info(symbol.upper(), timeframe.upper())
+
+    if info is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No historical data for {symbol} {timeframe}",
+        )
+
+    return info.to_dict()
+
+
+@app.post("/api/historical/download")
+async def download_historical_data(
+    symbol: str = "XAUUSD",
+    timeframe: str = "M5",
+    days: int = 365,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Download historical data from data source.
+
+    WARNING: This can take several minutes for large date ranges.
+    Consider using the update_historical.py script instead.
+    """
+    global historical_store
+
+    if historical_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Historical data store not initialized",
+        )
+
+    try:
+        # Download data
+        df = historical_store.download_historical(
+            symbol=symbol.upper(),
+            timeframe=timeframe.upper(),
+            days=days,
+        )
+
+        # Save to parquet
+        file_path = historical_store.save(df, symbol.upper(), timeframe.upper())
+
+        # Get info
+        info = historical_store.get_data_info(symbol.upper(), timeframe.upper())
+
+        return {
+            "status": "success",
+            "message": f"Downloaded {len(df)} bars",
+            "file_path": str(file_path),
+            "data_info": info.to_dict() if info else None,
+        }
+
+    except Exception as e:
+        logger.error(f"Error downloading historical data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download data: {str(e)}",
+        )
+
+
+@app.post("/api/historical/update")
+async def update_historical_data(
+    symbol: str = "XAUUSD",
+    timeframe: str = "M5",
+    days: int = 7,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Update existing historical data with recent bars.
+
+    Appends new data to existing parquet file.
+    """
+    global historical_store
+
+    if historical_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Historical data store not initialized",
+        )
+
+    try:
+        new_bars, total_bars = historical_store.update(
+            symbol=symbol.upper(),
+            timeframe=timeframe.upper(),
+            days=days,
+        )
+
+        info = historical_store.get_data_info(symbol.upper(), timeframe.upper())
+
+        return {
+            "status": "success",
+            "new_bars_added": new_bars,
+            "total_bars": total_bars,
+            "data_info": info.to_dict() if info else None,
+        }
+
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No existing data for {symbol} {timeframe}. Use /api/historical/download first.",
+        )
+    except Exception as e:
+        logger.error(f"Error updating historical data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update data: {str(e)}",
+        )
+
+
+@app.delete("/api/historical/{symbol}/{timeframe}")
+async def delete_historical_data(
+    symbol: str,
+    timeframe: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """Delete historical data file."""
+    global historical_store
+
+    if historical_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Historical data store not initialized",
+        )
+
+    deleted = historical_store.delete(symbol.upper(), timeframe.upper())
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No data found for {symbol} {timeframe}",
+        )
+
+    return {
+        "status": "success",
+        "message": f"Deleted {symbol} {timeframe} data",
+    }
 
 
 def _get_confluence_recommendation(score: float, trend: str) -> str:

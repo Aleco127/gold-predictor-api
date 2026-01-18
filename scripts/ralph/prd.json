@@ -261,8 +261,8 @@
       ],
       "files": ["src/storage/historical_data.py", "scripts/update_historical.py", "src/api/server.py", "requirements.txt"],
       "dependencies": [],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented HistoricalDataStore with Parquet format (pyarrow/snappy compression), DataRangeInfo dataclass, download_historical (chunked downloads), save/load with date filtering, update (incremental), list_available_data, delete, get_status. Created scripts/update_historical.py CLI with --symbol, --timeframe, --days, --full, --multiple-timeframes options. Added API endpoints: GET /api/historical (list), GET /api/historical/{symbol}/{timeframe} (info), POST /api/historical/download, POST /api/historical/update, DELETE /api/historical/{symbol}/{timeframe}."
     },
     {
       "id": "US-015",
