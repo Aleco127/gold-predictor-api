@@ -243,8 +243,8 @@
       ],
       "files": ["src/features/multi_timeframe.py", "src/models/ensemble.py", "src/api/server.py"],
       "dependencies": ["US-005"],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented confluence scoring with calculate_confluence() method. Added confluence fields to Prediction dataclass. Created API endpoints: /api/timeframes, /api/timeframes/confluence, /api/timeframes/summary, /api/timeframes/{timeframe}, /api/timeframes/status"
     },
     {
       "id": "US-014",

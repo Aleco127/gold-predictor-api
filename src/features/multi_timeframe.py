@@ -371,3 +371,141 @@ class MultiTimeframeAnalyzer:
             "last_fetch": self._last_fetch.isoformat() if self._last_fetch else None,
             "data_connector_type": type(self.data_connector).__name__,
         }
+
+    def calculate_confluence(
+        self,
+        analysis: MultiTimeframeAnalysis,
+    ) -> MultiTimeframeAnalysis:
+        """
+        Calculate confluence score across all timeframes.
+
+        Confluence measures how well multiple timeframes agree on direction.
+        Score ranges from 0-100%:
+        - 100% = All timeframes strongly agree
+        - 0% = Complete disagreement
+
+        Args:
+            analysis: MultiTimeframeAnalysis with timeframe data
+
+        Returns:
+            Updated MultiTimeframeAnalysis with confluence metrics
+        """
+        if not analysis.timeframes:
+            return analysis
+
+        # Count trend directions
+        bullish_count = 0
+        bearish_count = 0
+        neutral_count = 0
+
+        # Count RSI conditions
+        overbought_count = 0
+        oversold_count = 0
+
+        # Count EMA alignments
+        ema_bullish = 0
+        ema_bearish = 0
+
+        total_timeframes = len(analysis.timeframes)
+
+        for tf, data in analysis.timeframes.items():
+            # Trend direction
+            if data.trend_direction == "BULLISH":
+                bullish_count += 1
+            elif data.trend_direction == "BEARISH":
+                bearish_count += 1
+            else:
+                neutral_count += 1
+
+            # RSI condition
+            if data.rsi_condition == "OVERBOUGHT":
+                overbought_count += 1
+            elif data.rsi_condition == "OVERSOLD":
+                oversold_count += 1
+
+            # EMA alignment
+            if data.ema_alignment == "BULLISH":
+                ema_bullish += 1
+            elif data.ema_alignment == "BEARISH":
+                ema_bearish += 1
+
+        # Calculate trend agreement percentage
+        max_trend_agreement = max(bullish_count, bearish_count, neutral_count)
+        trend_agreement = max_trend_agreement / total_timeframes
+
+        # Calculate EMA agreement percentage
+        max_ema_agreement = max(ema_bullish, ema_bearish, total_timeframes - ema_bullish - ema_bearish)
+        ema_agreement = max_ema_agreement / total_timeframes
+
+        # RSI confluence bonus/penalty
+        # If RSI agrees with trend, it's a bonus
+        rsi_factor = 1.0
+        if bullish_count > bearish_count and oversold_count > 0:
+            # Bullish trend with oversold RSI = strong buy signal
+            rsi_factor = 1.1
+        elif bearish_count > bullish_count and overbought_count > 0:
+            # Bearish trend with overbought RSI = strong sell signal
+            rsi_factor = 1.1
+        elif bullish_count > bearish_count and overbought_count > total_timeframes / 2:
+            # Bullish trend but overbought = weakening
+            rsi_factor = 0.9
+        elif bearish_count > bullish_count and oversold_count > total_timeframes / 2:
+            # Bearish trend but oversold = weakening
+            rsi_factor = 0.9
+
+        # Calculate confluence score (0-100%)
+        # Weighted: 60% trend agreement, 30% EMA alignment, 10% RSI factor
+        raw_confluence = (
+            trend_agreement * 0.6 +
+            ema_agreement * 0.3 +
+            0.1 * rsi_factor
+        )
+        confluence_score = min(raw_confluence * 100, 100.0)
+
+        # Determine overall trend
+        if bullish_count > bearish_count and bullish_count > neutral_count:
+            overall_trend = "BULLISH"
+        elif bearish_count > bullish_count and bearish_count > neutral_count:
+            overall_trend = "BEARISH"
+        else:
+            overall_trend = "NEUTRAL"
+
+        # Calculate trend strength (0-100%)
+        # Based on how strongly the majority agrees
+        if total_timeframes > 0:
+            trend_strength = (max_trend_agreement / total_timeframes) * 100
+        else:
+            trend_strength = 0.0
+
+        # Update analysis object
+        analysis.confluence_score = confluence_score
+        analysis.overall_trend = overall_trend
+        analysis.trend_strength = trend_strength
+
+        logger.info(
+            f"Confluence calculated: score={confluence_score:.1f}%, "
+            f"trend={overall_trend}, strength={trend_strength:.1f}%"
+        )
+
+        return analysis
+
+    def analyze_with_confluence(
+        self,
+        symbol: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> MultiTimeframeAnalysis:
+        """
+        Perform multi-timeframe analysis with confluence calculation.
+
+        This is a convenience method that calls analyze() followed by
+        calculate_confluence().
+
+        Args:
+            symbol: Trading symbol (uses connector default if None)
+            force_refresh: Force data refresh even if cached
+
+        Returns:
+            MultiTimeframeAnalysis with confluence metrics populated
+        """
+        analysis = self.analyze(symbol, force_refresh)
+        return self.calculate_confluence(analysis)

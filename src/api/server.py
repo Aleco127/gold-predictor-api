@@ -35,6 +35,7 @@ from ..data.news_fetcher import NewsFetcher, NewsArticle
 from ..features.sentiment_analyzer import SentimentAnalyzer, AggregateSentiment
 from ..storage.trade_database import TradeDatabase, TradeFilter, TradeSummary
 from ..monitoring.performance_tracker import TradingPerformanceTracker, PerformanceMetrics, DrawdownInfo
+from ..features.multi_timeframe import MultiTimeframeAnalyzer, MultiTimeframeAnalysis, TimeframeData
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -49,6 +50,7 @@ news_fetcher: Optional[NewsFetcher] = None
 sentiment_analyzer: Optional[SentimentAnalyzer] = None
 trade_db: Optional[TradeDatabase] = None
 trading_performance_tracker: Optional[TradingPerformanceTracker] = None
+mtf_analyzer: Optional[MultiTimeframeAnalyzer] = None
 
 
 class PredictionRequest(BaseModel):
@@ -304,7 +306,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer, trade_db, trading_performance_tracker
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer, trade_db, trading_performance_tracker, mtf_analyzer
 
     logger.info("Starting Gold Predictor API...")
 
@@ -440,6 +442,15 @@ async def lifespan(app: FastAPI):
             risk_free_rate=0.05,  # 5% annualized risk-free rate
         )
         logger.info("Trading performance tracker initialized")
+
+        # Initialize multi-timeframe analyzer (US-005, US-006)
+        mtf_analyzer = MultiTimeframeAnalyzer(
+            data_connector=data_connector,
+            indicator_calculator=indicator_calculator,
+            timeframes=["M5", "M15", "H1", "H4"],
+            bars_per_timeframe=200,
+        )
+        logger.info("Multi-timeframe analyzer initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -3210,6 +3221,187 @@ async def get_daily_report(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate daily report: {str(e)}",
         )
+
+
+# ============================================================================
+# MULTI-TIMEFRAME ANALYSIS ENDPOINTS (US-005, US-006)
+# ============================================================================
+
+@app.get("/api/timeframes")
+async def get_timeframe_analysis(
+    symbol: str = "XAUUSD",
+    force_refresh: bool = False,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get multi-timeframe analysis with confluence scoring.
+
+    Analyzes M5, M15, H1, and H4 timeframes and calculates:
+    - Trend direction for each timeframe (BULLISH/BEARISH/NEUTRAL)
+    - RSI condition (OVERBOUGHT/OVERSOLD/NEUTRAL)
+    - EMA alignment
+    - Confluence score (0-100%)
+    """
+    global mtf_analyzer
+
+    if mtf_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Multi-timeframe analyzer not initialized",
+        )
+
+    try:
+        # Run analysis with confluence
+        analysis = mtf_analyzer.analyze_with_confluence(
+            symbol=symbol,
+            force_refresh=force_refresh,
+        )
+
+        return analysis.to_dict()
+
+    except Exception as e:
+        logger.error(f"Error in timeframe analysis: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze timeframes: {str(e)}",
+        )
+
+
+@app.get("/api/timeframes/confluence")
+async def get_confluence_score(
+    symbol: str = "XAUUSD",
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get just the confluence score and trend summary.
+
+    Returns a quick summary without full timeframe details.
+    Useful for confidence adjustments in trading decisions.
+    """
+    global mtf_analyzer
+
+    if mtf_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Multi-timeframe analyzer not initialized",
+        )
+
+    try:
+        analysis = mtf_analyzer.analyze_with_confluence(symbol=symbol)
+
+        return {
+            "symbol": analysis.symbol,
+            "confluence_score": round(analysis.confluence_score, 2),
+            "overall_trend": analysis.overall_trend,
+            "trend_strength": round(analysis.trend_strength, 2),
+            "analysis_time": analysis.analysis_time.isoformat(),
+            "recommendation": _get_confluence_recommendation(
+                analysis.confluence_score,
+                analysis.overall_trend,
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting confluence: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get confluence: {str(e)}",
+        )
+
+
+@app.get("/api/timeframes/summary")
+async def get_timeframe_summary(
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get quick summary of cached timeframe signals.
+
+    Returns trend counts without fetching new data.
+    Faster than full analysis - uses cached values.
+    """
+    global mtf_analyzer
+
+    if mtf_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Multi-timeframe analyzer not initialized",
+        )
+
+    return mtf_analyzer.get_summary()
+
+
+@app.get("/api/timeframes/{timeframe}")
+async def get_single_timeframe(
+    timeframe: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get analysis for a single timeframe.
+
+    Valid timeframes: M5, M15, H1, H4
+    """
+    global mtf_analyzer
+
+    if mtf_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Multi-timeframe analyzer not initialized",
+        )
+
+    valid_timeframes = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+    if timeframe.upper() not in valid_timeframes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid timeframe. Use: {', '.join(valid_timeframes)}",
+        )
+
+    tf_data = mtf_analyzer.get_timeframe_data(timeframe.upper())
+
+    if tf_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No cached data for {timeframe}. Run /api/timeframes first.",
+        )
+
+    return tf_data.to_dict()
+
+
+@app.get("/api/timeframes/status")
+async def get_mtf_status(
+    api_key: str = Depends(verify_api_key),
+):
+    """Get multi-timeframe analyzer status."""
+    global mtf_analyzer
+
+    if mtf_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Multi-timeframe analyzer not initialized",
+        )
+
+    return mtf_analyzer.get_status()
+
+
+def _get_confluence_recommendation(score: float, trend: str) -> str:
+    """Generate trading recommendation based on confluence."""
+    if score >= 80:
+        if trend == "BULLISH":
+            return "Strong bullish confluence - favorable for long positions"
+        elif trend == "BEARISH":
+            return "Strong bearish confluence - favorable for short positions"
+        else:
+            return "Strong neutral confluence - consider waiting for direction"
+    elif score >= 60:
+        if trend == "BULLISH":
+            return "Moderate bullish confluence - consider long with caution"
+        elif trend == "BEARISH":
+            return "Moderate bearish confluence - consider short with caution"
+        else:
+            return "Moderate neutral - mixed signals, wait for clarity"
+    elif score >= 40:
+        return "Weak confluence - conflicting signals across timeframes"
+    else:
+        return "Very weak confluence - avoid trading, wait for alignment"
 
 
 def _format_telegram_daily_report(report: dict) -> str:

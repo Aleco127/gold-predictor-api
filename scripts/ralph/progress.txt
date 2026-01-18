@@ -458,3 +458,43 @@ Branch: ralph/gold-predictor-v2
 - Summary shows bullish/bearish/neutral counts across timeframes
 - Overall trend = majority of timeframes agree
 
+### Iteration 13 - US-006: Timeframe Confluence Scoring
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Updated `src/features/multi_timeframe.py`:
+  - Added `calculate_confluence()` method:
+    - Counts trend directions across timeframes (BULLISH/BEARISH/NEUTRAL)
+    - Counts RSI conditions (OVERBOUGHT/OVERSOLD)
+    - Counts EMA alignments
+    - Calculates weighted confluence score (60% trend, 30% EMA, 10% RSI factor)
+    - RSI factor boosts/penalizes based on trend-RSI agreement
+    - Returns overall_trend and trend_strength
+  - Added `analyze_with_confluence()` convenience method
+- Updated `src/models/ensemble.py`:
+  - Added confluence fields to Prediction dataclass: confluence_score, confluence_trend, confluence_strength
+  - Updated `to_dict()` to include confluence data in output
+- Updated `src/api/server.py`:
+  - Imported MultiTimeframeAnalyzer and related classes
+  - Added global mtf_analyzer instance
+  - Initialized mtf_analyzer in lifespan
+  - `/api/timeframes` - Full multi-timeframe analysis with confluence
+  - `/api/timeframes/confluence` - Quick confluence score with recommendation
+  - `/api/timeframes/summary` - Cached summary without refetch
+  - `/api/timeframes/{timeframe}` - Single timeframe details
+  - `/api/timeframes/status` - Analyzer configuration status
+  - Added `_get_confluence_recommendation()` helper for trading advice
+
+**Patterns Discovered:**
+- Confluence formula: (trend_agreement * 0.6) + (ema_agreement * 0.3) + (rsi_factor * 0.1)
+- RSI factor bonus: +10% when RSI supports trend (oversold in bullish, overbought in bearish)
+- RSI factor penalty: -10% when RSI contradicts trend (overbought in bullish, oversold in bearish)
+- Recommendation thresholds: 80%+ strong, 60%+ moderate, 40%+ weak, <40% avoid
+
+**Notes:**
+- Higher confluence = higher confidence in trade direction
+- 100% confluence means all timeframes agree on direction
+- API returns both numerical score and text recommendation
+- Confluence can be used to adjust position sizing or skip low-confidence trades
+- Cached data used for summary endpoint for faster response
+

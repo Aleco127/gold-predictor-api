@@ -39,6 +39,10 @@ class Prediction:
     lstm_prediction: float
     xgb_prediction: dict
     timestamp: datetime
+    # Multi-timeframe confluence (from US-006)
+    confluence_score: float = 0.0
+    confluence_trend: str = "NEUTRAL"
+    confluence_strength: float = 0.0
 
 
 class EnsemblePredictor:
@@ -359,6 +363,12 @@ Time: {prediction.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
             "xgb_prediction": prediction.xgb_prediction,
             "timestamp": prediction.timestamp.isoformat(),
             "should_alert": self.should_alert(prediction),
+            # Multi-timeframe confluence (US-006)
+            "confluence": {
+                "score": prediction.confluence_score,
+                "trend": prediction.confluence_trend,
+                "strength": prediction.confluence_strength,
+            },
         }
 
 
