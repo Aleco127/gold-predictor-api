@@ -1,0 +1,339 @@
+{
+  "name": "Gold Prediction + Auto Trade",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "trigger-5min",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [-900, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.GOLD_PREDICTOR_URL || 'http://gold-predictor:8000'}}/predict-and-trade",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "size",
+              "value": "0.01"
+            },
+            {
+              "name": "min_confidence",
+              "value": "0.65"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.GOLD_PREDICTOR_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "predict-and-trade",
+      "name": "Predict & Trade",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [-680, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-trade-executed",
+              "leftValue": "={{$json.trade_executed}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "trade-executed-check",
+      "name": "Trade Executed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-440, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-trade-success",
+              "leftValue": "={{$json.trade.success}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "trade-success-check",
+      "name": "Trade Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-200, 100]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "text": "=\ud83d\udcb0 **GOLD TRADE EXECUTED** \ud83d\udcb0\n\n\u2705 Trade Status: SUCCESS\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\n**Trade Details:**\n\ud83d\udd39 Direction: {{$json.trade.direction}}\n\ud83d\udd39 Size: {{$json.trade.size}} lots\n\ud83d\udd39 Entry: ${{$json.trade.level ? $json.trade.level.toFixed(2) : 'N/A'}}\n\ud83d\udd39 Stop Loss: ${{$json.trade.stop_loss ? $json.trade.stop_loss.toFixed(2) : 'N/A'}}\n\ud83d\udd39 Take Profit: ${{$json.trade.take_profit ? $json.trade.take_profit.toFixed(2) : 'N/A'}}\n\n**Price Info:**\n\ud83d\udcb5 Current: ${{$json.prediction.current_price.toFixed(2)}}\n\ud83c\udfaf Predicted: ${{$json.prediction.predicted_price.toFixed(2)}}\n\n\ud83c\udd94 Deal ID: {{$json.trade.deal_id || 'N/A'}}\n\u23f0 {{new Date().toLocaleString()}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-trade-alert",
+      "name": "Send Trade Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [60, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "text": "=\u26a0\ufe0f **GOLD TRADE FAILED** \u26a0\ufe0f\n\n\u274c Trade Status: FAILED\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\n**Error:** {{$json.trade.error || 'Unknown error'}}\n\n**Price Info:**\n\ud83d\udcb5 Current: ${{$json.prediction.current_price.toFixed(2)}}\n\ud83c\udfaf Predicted: ${{$json.prediction.predicted_price.toFixed(2)}}\n\n\u23f0 {{new Date().toLocaleString()}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-trade-failed",
+      "name": "Trade Failed Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [60, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-strong-signal",
+              "leftValue": "={{$json.prediction.signal}}",
+              "rightValue": "STRONG",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "strong-signal-check",
+      "name": "Strong Signal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "text": "=\ud83e\udd47 **GOLD STRONG SIGNAL** (No Trade)\n\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\n\ud83d\udcb5 Current: ${{$json.prediction.current_price.toFixed(2)}}\n\ud83c\udfaf Predicted: ${{$json.prediction.predicted_price.toFixed(2)}}\n\n\u2139\ufe0f Trade not executed (confidence below threshold)\n\n\u23f0 {{new Date().toLocaleString()}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-strong-no-trade",
+      "name": "Strong Signal Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [60, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID || '6074722648'}}",
+        "text": "=\ud83e\udd47 Gold Signal (No Trade)\n\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\ud83d\udcb5 Price: ${{$json.prediction.current_price.toFixed(2)}}\n\n\u2139\ufe0f Trade not executed\n\n\u23f0 {{new Date().toLocaleString()}}",
+        "additionalFields": {}
+      },
+      "id": "send-normal-no-trade",
+      "name": "Normal Signal Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [60, 480]
+    },
+    {
+      "parameters": {},
+      "id": "no-action",
+      "name": "No Action (Hold/Low Confidence)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [60, 620]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-buy-sell",
+              "leftValue": "={{$json.prediction.signal}}",
+              "rightValue": "BUY",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "has-signal-check",
+      "name": "Has BUY/SELL Signal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-200, 500]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Predict & Trade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Predict & Trade": {
+      "main": [
+        [
+          {
+            "node": "Trade Executed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trade Executed?": {
+      "main": [
+        [
+          {
+            "node": "Trade Success?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Strong Signal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trade Success?": {
+      "main": [
+        [
+          {
+            "node": "Send Trade Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Trade Failed Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Strong Signal?": {
+      "main": [
+        [
+          {
+            "node": "Strong Signal Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has BUY/SELL Signal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has BUY/SELL Signal?": {
+      "main": [
+        [
+          {
+            "node": "Normal Signal Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Action (Hold/Low Confidence)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
