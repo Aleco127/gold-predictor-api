@@ -32,6 +32,7 @@ from ..trading import (
 )
 from ..data.economic_calendar import EconomicCalendar, ImpactLevel, NewsFilter, NewsFilterResult
 from ..data.news_fetcher import NewsFetcher, NewsArticle
+from ..features.sentiment_analyzer import SentimentAnalyzer, AggregateSentiment
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -43,6 +44,7 @@ position_manager: Optional[PositionManager] = None
 economic_calendar: Optional[EconomicCalendar] = None
 news_filter: Optional[NewsFilter] = None
 news_fetcher: Optional[NewsFetcher] = None
+sentiment_analyzer: Optional[SentimentAnalyzer] = None
 
 
 class PredictionRequest(BaseModel):
@@ -298,7 +300,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer
 
     logger.info("Starting Gold Predictor API...")
 
@@ -415,6 +417,13 @@ async def lifespan(app: FastAPI):
             logger.info("News fetcher initialized with API key")
         else:
             logger.warning("NEWS_API_KEY not configured, news fetcher disabled")
+
+        # Initialize sentiment analyzer (lazy load to avoid slow startup)
+        sentiment_analyzer = SentimentAnalyzer(
+            cache_duration_minutes=60,
+            lazy_load=True,  # Model loaded on first use
+        )
+        logger.info("Sentiment analyzer initialized (lazy load)")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -2240,6 +2249,180 @@ async def refresh_news(api_key: str = Depends(verify_api_key)):
         "articles_fetched": len(articles),
         "timestamp": datetime.now().isoformat(),
     }
+
+
+# ============================================================================
+# Sentiment Analysis Endpoints
+# ============================================================================
+
+
+@app.get("/api/sentiment")
+async def get_current_sentiment(
+    hours: int = 4,
+    force_refresh: bool = False,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get current market sentiment from news analysis.
+
+    Analyzes recent news headlines using FinBERT and returns aggregate sentiment.
+    Score ranges from -1.0 (bearish) to +1.0 (bullish).
+
+    Args:
+        hours: Time period to analyze (default: 4 hours)
+        force_refresh: Force recompute even if cached
+    """
+    global sentiment_analyzer, news_fetcher
+
+    if sentiment_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sentiment analyzer not initialized",
+        )
+
+    if news_fetcher is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="News fetcher not initialized. Configure NEWS_API_KEY for sentiment analysis.",
+        )
+
+    try:
+        aggregate = await sentiment_analyzer.get_current_sentiment(
+            news_fetcher=news_fetcher,
+            period_hours=hours,
+            force_refresh=force_refresh,
+        )
+
+        return {
+            **aggregate.to_dict(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Sentiment analysis error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Sentiment analysis failed: {str(e)}",
+        )
+
+
+@app.post("/api/sentiment/analyze")
+async def analyze_headline(
+    headline: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Analyze sentiment of a single headline.
+
+    Returns sentiment label, confidence, and score for the given text.
+    """
+    global sentiment_analyzer
+
+    if sentiment_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sentiment analyzer not initialized",
+        )
+
+    try:
+        score = sentiment_analyzer.analyze_headline(headline)
+        return {
+            **score.to_dict(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Headline analysis error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Analysis failed: {str(e)}",
+        )
+
+
+@app.post("/api/sentiment/analyze-batch")
+async def analyze_batch(
+    headlines: list[str],
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Analyze sentiment of multiple headlines.
+
+    Returns individual scores and aggregate sentiment for the batch.
+    """
+    global sentiment_analyzer
+
+    if sentiment_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sentiment analyzer not initialized",
+        )
+
+    if not headlines:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No headlines provided",
+        )
+
+    try:
+        # Convert to expected format
+        headline_dicts = [{"title": h} for h in headlines]
+        scores = sentiment_analyzer.analyze_headlines(headline_dicts)
+        aggregate = sentiment_analyzer.calculate_aggregate(scores, period_hours=24)
+
+        return {
+            "individual_scores": [s.to_dict() for s in scores],
+            "aggregate": aggregate.to_dict(),
+            "count": len(scores),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Batch analysis error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Batch analysis failed: {str(e)}",
+        )
+
+
+@app.get("/api/sentiment/status")
+async def get_sentiment_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get sentiment analyzer status.
+
+    Returns model status, cache info, and configuration.
+    """
+    global sentiment_analyzer
+
+    if sentiment_analyzer is None:
+        return {
+            "configured": False,
+            "message": "Sentiment analyzer not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    status_data = sentiment_analyzer.get_status()
+    status_data["timestamp"] = datetime.now().isoformat()
+    return status_data
+
+
+@app.post("/api/sentiment/clear-cache")
+async def clear_sentiment_cache(api_key: str = Depends(verify_api_key)):
+    """
+    Clear sentiment analysis cache.
+
+    Forces recomputation on next request.
+    """
+    global sentiment_analyzer
+
+    if sentiment_analyzer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sentiment analyzer not initialized",
+        )
+
+    result = sentiment_analyzer.clear_cache()
+    result["timestamp"] = datetime.now().isoformat()
+    return result
 
 
 # Main entry point

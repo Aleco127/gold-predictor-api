@@ -263,3 +263,41 @@ Branch: ralph/gold-predictor-v2
 - get_headlines_for_sentiment() returns simplified format for FinBERT
 - Cache prevents hitting API rate limits (NewsAPI free: 100 requests/day)
 
+### Iteration 8 - US-004: FinBERT Sentiment Analysis
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/features/sentiment_analyzer.py` - Full SentimentAnalyzer class with:
+  - SentimentScore dataclass (headline, sentiment, confidence, score)
+  - AggregateSentiment dataclass (averages, counts, label)
+  - FinBERT model integration using ProsusAI/finbert
+  - Lazy loading to avoid slow startup (model loaded on first use)
+  - Score caching with configurable duration (default 60 min)
+  - Aggregate caching for performance
+  - Methods: analyze_headline, analyze_headlines, calculate_aggregate, get_current_sentiment
+  - Score mapping: positive=+1, negative=-1, neutral=0, scaled by confidence
+  - Sentiment labels: BULLISH (>=0.15), BEARISH (<=-0.15), NEUTRAL
+- Updated `requirements.txt` - Added transformers>=4.30.0 for FinBERT
+- Updated `src/api/server.py`:
+  - Added SentimentAnalyzer import and global instance
+  - Initialize SentimentAnalyzer in lifespan with lazy_load=True
+  - `/api/sentiment` - Get current aggregate sentiment from news
+  - `/api/sentiment/analyze` - Analyze single headline
+  - `/api/sentiment/analyze-batch` - Analyze multiple headlines
+  - `/api/sentiment/status` - Get analyzer status and cache info
+  - `/api/sentiment/clear-cache` - Clear sentiment cache
+
+**Patterns Discovered:**
+- Hugging Face transformers pipeline for sentiment-analysis
+- ProsusAI/finbert returns labels: "positive", "negative", "neutral"
+- Score = base_score (-1/0/+1) * confidence (0-1)
+- Weighted average uses confidence as weight
+- Lazy loading prevents slow startup (model ~400MB)
+- MD5 hash for cache keys on headlines
+
+**Notes:**
+- First call to /api/sentiment will be slow (model download ~400MB)
+- Subsequent calls use cached model and scores
+- Aggregate sentiment combines with news fetcher (requires NEWS_API_KEY)
+- BULLISH/BEARISH thresholds at +/-0.15 weighted score
+
