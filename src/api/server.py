@@ -34,6 +34,7 @@ from ..data.economic_calendar import EconomicCalendar, ImpactLevel, NewsFilter, 
 from ..data.news_fetcher import NewsFetcher, NewsArticle
 from ..features.sentiment_analyzer import SentimentAnalyzer, AggregateSentiment
 from ..storage.trade_database import TradeDatabase, TradeFilter, TradeSummary
+from ..monitoring.performance_tracker import TradingPerformanceTracker, PerformanceMetrics, DrawdownInfo
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -47,6 +48,7 @@ news_filter: Optional[NewsFilter] = None
 news_fetcher: Optional[NewsFetcher] = None
 sentiment_analyzer: Optional[SentimentAnalyzer] = None
 trade_db: Optional[TradeDatabase] = None
+trading_performance_tracker: Optional[TradingPerformanceTracker] = None
 
 
 class PredictionRequest(BaseModel):
@@ -302,7 +304,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer, trade_db
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer, trade_db, trading_performance_tracker
 
     logger.info("Starting Gold Predictor API...")
 
@@ -430,6 +432,14 @@ async def lifespan(app: FastAPI):
         # Initialize trade database
         trade_db = TradeDatabase(database_url="sqlite:///data/trades.db")
         logger.info("Trade database initialized")
+
+        # Initialize trading performance tracker
+        trading_performance_tracker = TradingPerformanceTracker(
+            trade_db=trade_db,
+            initial_balance=settings.default_account_balance,
+            risk_free_rate=0.05,  # 5% annualized risk-free rate
+        )
+        logger.info("Trading performance tracker initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -2831,6 +2841,223 @@ async def get_trade_db_status(api_key: str = Depends(verify_api_key)):
         }
 
     status_data = trade_db.get_status()
+    status_data["timestamp"] = datetime.now().isoformat()
+    return status_data
+
+
+# ==================== Performance Metrics Endpoints ====================
+
+
+@app.get("/api/performance")
+async def get_performance_metrics(
+    period: str = "all",
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get trading performance metrics.
+
+    Returns comprehensive performance metrics including:
+    - Win rate, profit factor, expectancy
+    - Maximum drawdown
+    - Sharpe ratio (annualized)
+    - Sortino ratio
+    - Risk-reward ratio
+    - Consecutive win/loss streaks
+
+    Args:
+        period: Time period - "7d", "30d", "90d", "365d", "all"
+    """
+    global trading_performance_tracker
+
+    if trading_performance_tracker is None:
+        return {
+            "configured": False,
+            "message": "Performance tracker not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    try:
+        metrics = trading_performance_tracker.get_performance(period=period)
+        result = metrics.to_dict()
+        result["period"] = period
+        result["timestamp"] = datetime.now().isoformat()
+        return result
+    except Exception as e:
+        logger.error(f"Error getting performance metrics: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get performance metrics: {str(e)}",
+        )
+
+
+@app.get("/api/performance/drawdown")
+async def get_drawdown_metrics(
+    period: str = "all",
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get detailed drawdown analysis.
+
+    Returns drawdown metrics including:
+    - Maximum drawdown (percentage and amount)
+    - Current drawdown
+    - Peak and trough equity levels
+    - Drawdown period dates
+    """
+    global trading_performance_tracker
+
+    if trading_performance_tracker is None:
+        return {
+            "configured": False,
+            "message": "Performance tracker not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    try:
+        # Get date range based on period
+        from datetime import timedelta
+
+        period_map = {
+            "7d": timedelta(days=7),
+            "30d": timedelta(days=30),
+            "90d": timedelta(days=90),
+            "365d": timedelta(days=365),
+            "all": None,
+        }
+
+        delta = period_map.get(period.lower())
+        if delta:
+            from datetime import timezone
+            start_date = datetime.now(timezone.utc) - delta
+        else:
+            start_date = None
+
+        drawdown = trading_performance_tracker.get_drawdown(start_date=start_date)
+        result = drawdown.to_dict()
+        result["period"] = period
+        result["timestamp"] = datetime.now().isoformat()
+        return result
+    except Exception as e:
+        logger.error(f"Error getting drawdown metrics: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get drawdown metrics: {str(e)}",
+        )
+
+
+@app.get("/api/performance/equity-curve")
+async def get_equity_curve(
+    period: str = "all",
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get equity curve data for charting.
+
+    Returns a list of data points with timestamp, equity, and cumulative P&L.
+    Useful for plotting equity charts.
+    """
+    global trading_performance_tracker
+
+    if trading_performance_tracker is None:
+        return {
+            "configured": False,
+            "message": "Performance tracker not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    try:
+        # Get date range based on period
+        from datetime import timedelta, timezone
+
+        period_map = {
+            "7d": timedelta(days=7),
+            "30d": timedelta(days=30),
+            "90d": timedelta(days=90),
+            "365d": timedelta(days=365),
+            "all": None,
+        }
+
+        delta = period_map.get(period.lower())
+        if delta:
+            start_date = datetime.now(timezone.utc) - delta
+        else:
+            start_date = None
+
+        curve = trading_performance_tracker.get_equity_curve(start_date=start_date)
+        return {
+            "equity_curve": curve,
+            "data_points": len(curve),
+            "period": period,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error getting equity curve: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get equity curve: {str(e)}",
+        )
+
+
+@app.get("/api/performance/summary")
+async def get_performance_summary(api_key: str = Depends(verify_api_key)):
+    """
+    Get a quick summary of performance across multiple periods.
+
+    Returns key metrics for 7d, 30d, 90d, and all-time periods.
+    """
+    global trading_performance_tracker
+
+    if trading_performance_tracker is None:
+        return {
+            "configured": False,
+            "message": "Performance tracker not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    try:
+        periods = ["7d", "30d", "90d", "all"]
+        summary = {}
+
+        for period in periods:
+            metrics = trading_performance_tracker.get_performance(period=period)
+            summary[period] = {
+                "total_trades": metrics.total_trades,
+                "win_rate": round(metrics.win_rate * 100, 2),
+                "total_pnl": round(metrics.total_pnl, 2),
+                "profit_factor": round(metrics.profit_factor, 4),
+                "sharpe_ratio": round(metrics.sharpe_ratio, 4),
+                "max_drawdown": round(metrics.max_drawdown * 100, 2),
+                "expectancy": round(metrics.expectancy, 2),
+            }
+
+        return {
+            "periods": summary,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error getting performance summary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get performance summary: {str(e)}",
+        )
+
+
+@app.get("/api/performance/status")
+async def get_performance_tracker_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get performance tracker status and configuration.
+    """
+    global trading_performance_tracker
+
+    if trading_performance_tracker is None:
+        return {
+            "configured": False,
+            "message": "Performance tracker not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    status_data = trading_performance_tracker.get_status()
+    status_data["configured"] = True
     status_data["timestamp"] = datetime.now().isoformat()
     return status_data
 

@@ -345,3 +345,42 @@ Branch: ralph/gold-predictor-v2
 - Prediction accuracy tracks direction (UP/DOWN) not exact price
 - Summary statistics exclude OPEN trades from win rate calculation
 
+### Iteration 10 - US-012: Performance Metrics API
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/monitoring/performance_tracker.py` - Full TradingPerformanceTracker class with:
+  - DrawdownInfo dataclass with max/current drawdown, peak/trough equity
+  - PerformanceMetrics dataclass with 25+ metrics including streaks
+  - TradingPerformanceTracker class (named to avoid conflict with PerformanceTracker in drift_detector.py)
+  - Sharpe ratio calculation (annualized with risk-free rate adjustment)
+  - Sortino ratio calculation (downside deviation only)
+  - Maximum drawdown tracking (peak-to-trough equity analysis)
+  - Expectancy calculation: E = (Win% * Avg Win) + (Loss% * Avg Loss)
+  - Profit factor, risk-reward ratio, consecutive win/loss streaks
+  - Equity curve generation for charting
+  - Period filtering: 7d, 30d, 90d, 365d, all
+- Updated `src/monitoring/__init__.py` - Exported TradingPerformanceTracker, PerformanceMetrics, DrawdownInfo
+- Updated `src/api/server.py`:
+  - Added TradingPerformanceTracker import and global instance
+  - Initialize TradingPerformanceTracker in lifespan with trade_db
+  - `/api/performance` - Get full performance metrics with period filter
+  - `/api/performance/drawdown` - Get detailed drawdown analysis
+  - `/api/performance/equity-curve` - Get equity curve for charting
+  - `/api/performance/summary` - Quick summary across 7d/30d/90d/all periods
+  - `/api/performance/status` - Get tracker configuration and status
+
+**Patterns Discovered:**
+- Sharpe = (Mean Return - Risk Free Rate) / Std Dev * sqrt(periods_per_year)
+- Sortino uses only downside (negative) returns for volatility
+- Annualization factor = sqrt(trading_days_per_year) for ratios
+- Max drawdown requires tracking running peak equity
+- Named class TradingPerformanceTracker to avoid conflict with ModelPerformanceTracker
+
+**Notes:**
+- Risk-free rate default: 5% (US Treasury approximate)
+- Trading days per year: 252 (standard for annualization)
+- Profit factor capped at 999.99 when no losses (avoids infinity)
+- Breakeven threshold: 0.01 (trades with |P&L| < 0.01 are breakeven)
+- BULLISH/BEARISH thresholds at ±0.15 weighted sentiment score
+
