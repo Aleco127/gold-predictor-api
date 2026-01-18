@@ -457,3 +457,212 @@ class PositionManager:
             "pip_value": self.pip_value,
             "tracked_positions_count": len(self._positions),
         }
+
+    def calculate_partial_close_size(
+        self,
+        deal_id: str,
+        tp_level: int,
+    ) -> Optional[dict]:
+        """
+        Calculate the size to close for a specific TP level.
+
+        Args:
+            deal_id: Position identifier
+            tp_level: TP level (1, 2, or 3)
+
+        Returns:
+            Dict with close_size, remaining_size, and close_percentage, or None if not found
+        """
+        position = self._positions.get(deal_id)
+        if not position or not position.tp_levels:
+            return None
+
+        # Find the TP level
+        tp = None
+        for level in position.tp_levels:
+            if level["level"] == tp_level:
+                tp = level
+                break
+
+        if not tp:
+            return None
+
+        close_percentage = tp["close_percentage"]
+        close_size = round(position.size * close_percentage, 2)
+        remaining_size = round(position.size - close_size, 2)
+
+        return {
+            "deal_id": deal_id,
+            "tp_level": tp_level,
+            "close_percentage": close_percentage,
+            "close_size": close_size,
+            "remaining_size": remaining_size,
+            "current_total_size": position.size,
+            "tp_price": tp["price"],
+        }
+
+    def record_partial_close(
+        self,
+        deal_id: str,
+        tp_level: int,
+        close_size: float,
+        close_price: float,
+    ) -> Optional[dict]:
+        """
+        Record a partial close and update position size.
+
+        Args:
+            deal_id: Position identifier
+            tp_level: TP level that was hit
+            close_size: Size that was closed
+            close_price: Price at which the close occurred
+
+        Returns:
+            Updated position info or None if position not found
+        """
+        position = self._positions.get(deal_id)
+        if not position:
+            return None
+
+        old_size = position.size
+        position.size = round(position.size - close_size, 2)
+
+        # Mark TP as hit if not already
+        for tp in position.tp_levels:
+            if tp["level"] == tp_level and not tp["hit"]:
+                tp["hit"] = True
+                if tp_level not in position.tp_levels_hit:
+                    position.tp_levels_hit.append(tp_level)
+
+        logger.info(
+            f"Partial close recorded for {deal_id}: TP{tp_level} @ {close_price}, "
+            f"closed {close_size}, remaining {position.size}"
+        )
+
+        return {
+            "deal_id": deal_id,
+            "tp_level": tp_level,
+            "close_size": close_size,
+            "close_price": close_price,
+            "previous_size": old_size,
+            "remaining_size": position.size,
+            "tp_levels_hit": position.tp_levels_hit.copy(),
+        }
+
+    def move_stop_to_breakeven(self, deal_id: str) -> Optional[dict]:
+        """
+        Move stop-loss to entry price (breakeven).
+
+        Typically called after TP1 is hit to lock in zero loss.
+
+        Args:
+            deal_id: Position identifier
+
+        Returns:
+            Dict with old and new stop-loss values, or None if not found
+        """
+        position = self._positions.get(deal_id)
+        if not position:
+            return None
+
+        old_stop = position.current_stop_loss
+        new_stop = position.entry_price
+
+        # Only move if it improves the stop
+        if position.direction == PositionDirection.BUY:
+            if new_stop <= position.current_stop_loss:
+                return {
+                    "deal_id": deal_id,
+                    "moved": False,
+                    "reason": "Breakeven would not improve stop for BUY",
+                    "current_stop": position.current_stop_loss,
+                    "entry_price": position.entry_price,
+                }
+        else:  # SELL
+            if new_stop >= position.current_stop_loss:
+                return {
+                    "deal_id": deal_id,
+                    "moved": False,
+                    "reason": "Breakeven would not improve stop for SELL",
+                    "current_stop": position.current_stop_loss,
+                    "entry_price": position.entry_price,
+                }
+
+        position.current_stop_loss = new_stop
+        position.last_stop_update = datetime.now(timezone.utc)
+
+        logger.info(
+            f"Stop moved to breakeven for {deal_id}: {old_stop} -> {new_stop}"
+        )
+
+        return {
+            "deal_id": deal_id,
+            "moved": True,
+            "old_stop_loss": old_stop,
+            "new_stop_loss": new_stop,
+            "entry_price": position.entry_price,
+        }
+
+    def process_tp_hit(
+        self,
+        deal_id: str,
+        current_price: float,
+    ) -> list[dict]:
+        """
+        Process take-profit hits and calculate partial close actions.
+
+        Checks if any TP levels have been reached and returns actions to take.
+
+        Args:
+            deal_id: Position identifier
+            current_price: Current market price
+
+        Returns:
+            List of actions to execute (partial closes, breakeven moves)
+        """
+        position = self._positions.get(deal_id)
+        if not position or not position.tp_levels:
+            return []
+
+        actions = []
+        newly_hit = self.check_tp_levels(deal_id, current_price)
+
+        for tp in newly_hit:
+            tp_level = tp["level"]
+
+            # Calculate partial close
+            close_info = self.calculate_partial_close_size(deal_id, tp_level)
+            if close_info:
+                action = {
+                    "action": "partial_close",
+                    "deal_id": deal_id,
+                    "tp_level": tp_level,
+                    "close_size": close_info["close_size"],
+                    "remaining_size": close_info["remaining_size"],
+                    "tp_price": tp["price"],
+                    "current_price": current_price,
+                }
+                actions.append(action)
+
+                # After TP1, move stop to breakeven
+                if tp_level == 1:
+                    be_action = {
+                        "action": "move_to_breakeven",
+                        "deal_id": deal_id,
+                        "entry_price": position.entry_price,
+                        "reason": "TP1 hit - securing position",
+                    }
+                    actions.append(be_action)
+
+        return actions
+
+    def get_partial_tp_config(self) -> dict:
+        """Get default partial take-profit configuration."""
+        return {
+            "default_levels": [
+                {"level": 1, "atr_multiplier": 1.0, "close_percentage": 0.5},
+                {"level": 2, "atr_multiplier": 2.0, "close_percentage": 0.3},
+                {"level": 3, "atr_multiplier": 3.0, "close_percentage": 0.2},
+            ],
+            "move_to_breakeven_after": 1,  # TP level after which to move SL to breakeven
+        }

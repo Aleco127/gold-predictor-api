@@ -1480,6 +1480,369 @@ async def update_all_trailing_stops(
     }
 
 
+# ============================================================================
+# Partial Take-Profit Endpoints
+# ============================================================================
+
+
+@app.get("/api/partial-tp-config")
+async def get_partial_tp_config(api_key: str = Depends(verify_api_key)):
+    """
+    Get partial take-profit configuration.
+
+    Returns default TP levels (1x, 2x, 3x ATR) and close percentages (50%, 30%, 20%).
+    """
+    global position_manager
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    return position_manager.get_partial_tp_config()
+
+
+@app.post("/api/calculate-tp-levels")
+async def calculate_tp_levels(
+    entry_price: float,
+    direction: str,
+    atr: float,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Calculate take-profit levels for a position.
+
+    Returns 3 TP levels based on ATR with default close percentages.
+    """
+    global position_manager
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    tp_levels = position_manager.calculate_tp_levels(
+        entry_price=entry_price,
+        direction=direction,
+        atr=atr,
+    )
+
+    return {
+        "entry_price": entry_price,
+        "direction": direction,
+        "atr": atr,
+        "tp_levels": tp_levels,
+    }
+
+
+@app.post("/api/setup-position-with-tp")
+async def setup_position_with_tp(
+    request: AddPositionRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Add a position to tracker with automatically calculated TP levels.
+
+    Creates position with 3 TP levels based on entry ATR.
+    """
+    global position_manager
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    if request.entry_atr <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="entry_atr must be positive for TP level calculation",
+        )
+
+    # Calculate TP levels
+    tp_levels = position_manager.calculate_tp_levels(
+        entry_price=request.entry_price,
+        direction=request.direction,
+        atr=request.entry_atr,
+    )
+
+    # Add position with TP levels
+    position = position_manager.add_position(
+        deal_id=request.deal_id,
+        direction=request.direction,
+        entry_price=request.entry_price,
+        stop_loss=request.stop_loss,
+        take_profit=request.take_profit,
+        size=request.size,
+        symbol=request.symbol,
+        entry_atr=request.entry_atr,
+        tp_levels=tp_levels,
+    )
+
+    return {
+        "success": True,
+        "deal_id": position.deal_id,
+        "entry_price": position.entry_price,
+        "direction": position.direction.value,
+        "size": position.size,
+        "stop_loss": position.current_stop_loss,
+        "tp_levels": position.tp_levels,
+        "message": f"Position {position.deal_id} tracked with {len(tp_levels)} TP levels",
+    }
+
+
+@app.post("/api/check-tp-levels/{deal_id}")
+async def check_tp_levels(
+    deal_id: str,
+    execute_closes: bool = False,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Check if any TP levels have been hit for a position.
+
+    If execute_closes=True, will also execute partial closes via broker API.
+    """
+    global position_manager, data_connector
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    position = position_manager.get_position(deal_id)
+    if position is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Position {deal_id} not found",
+        )
+
+    # Get current price
+    if data_connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Data connector not initialized",
+        )
+
+    try:
+        df = data_connector.get_ohlcv(bars=1)
+        current_price = float(df["close"].iloc[-1])
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get current price: {str(e)}",
+        )
+
+    # Process TP hits
+    actions = position_manager.process_tp_hit(deal_id, current_price)
+
+    execution_results = []
+    if execute_closes and actions:
+        for action in actions:
+            if action["action"] == "partial_close":
+                # Execute partial close via broker
+                if hasattr(data_connector, "close_position"):
+                    close_result = data_connector.close_position(
+                        deal_id=action["deal_id"],
+                        size=action["close_size"],
+                    )
+
+                    if close_result.get("success"):
+                        # Record the partial close
+                        position_manager.record_partial_close(
+                            deal_id=action["deal_id"],
+                            tp_level=action["tp_level"],
+                            close_size=action["close_size"],
+                            close_price=current_price,
+                        )
+
+                    execution_results.append({
+                        "action": "partial_close",
+                        "tp_level": action["tp_level"],
+                        "close_size": action["close_size"],
+                        "broker_result": close_result,
+                    })
+
+            elif action["action"] == "move_to_breakeven":
+                # Move stop to breakeven
+                be_result = position_manager.move_stop_to_breakeven(action["deal_id"])
+
+                # Update broker stop-loss
+                if be_result and be_result.get("moved") and hasattr(data_connector, "update_position"):
+                    broker_update = data_connector.update_position(
+                        deal_id=action["deal_id"],
+                        stop_loss=be_result["new_stop_loss"],
+                    )
+                    execution_results.append({
+                        "action": "move_to_breakeven",
+                        "new_stop_loss": be_result["new_stop_loss"],
+                        "broker_result": broker_update,
+                    })
+
+    return {
+        "deal_id": deal_id,
+        "current_price": current_price,
+        "actions_identified": actions,
+        "executions": execution_results if execute_closes else [],
+        "tp_levels": position.tp_levels if position else [],
+        "tp_levels_hit": position.tp_levels_hit if position else [],
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/check-all-tp-levels")
+async def check_all_tp_levels(
+    execute_closes: bool = False,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Check TP levels for all tracked positions.
+
+    Optionally execute partial closes for any TP levels that are hit.
+    """
+    global position_manager, data_connector
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    if data_connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Data connector not initialized",
+        )
+
+    positions = position_manager.get_all_positions()
+    if not positions:
+        return {
+            "message": "No positions being tracked",
+            "results": [],
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # Get current price
+    try:
+        df = data_connector.get_ohlcv(bars=1)
+        current_price = float(df["close"].iloc[-1])
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get current price: {str(e)}",
+        )
+
+    results = []
+    total_closes = 0
+    total_breakevens = 0
+
+    for pos in positions:
+        actions = position_manager.process_tp_hit(pos.deal_id, current_price)
+
+        pos_result = {
+            "deal_id": pos.deal_id,
+            "direction": pos.direction.value,
+            "actions": actions,
+            "executions": [],
+        }
+
+        if execute_closes and actions:
+            for action in actions:
+                if action["action"] == "partial_close":
+                    if hasattr(data_connector, "close_position"):
+                        close_result = data_connector.close_position(
+                            deal_id=action["deal_id"],
+                            size=action["close_size"],
+                        )
+
+                        if close_result.get("success"):
+                            position_manager.record_partial_close(
+                                deal_id=action["deal_id"],
+                                tp_level=action["tp_level"],
+                                close_size=action["close_size"],
+                                close_price=current_price,
+                            )
+                            total_closes += 1
+
+                        pos_result["executions"].append({
+                            "action": "partial_close",
+                            "tp_level": action["tp_level"],
+                            "success": close_result.get("success", False),
+                        })
+
+                elif action["action"] == "move_to_breakeven":
+                    be_result = position_manager.move_stop_to_breakeven(action["deal_id"])
+
+                    if be_result and be_result.get("moved") and hasattr(data_connector, "update_position"):
+                        broker_update = data_connector.update_position(
+                            deal_id=action["deal_id"],
+                            stop_loss=be_result["new_stop_loss"],
+                        )
+                        if broker_update.get("success"):
+                            total_breakevens += 1
+
+                        pos_result["executions"].append({
+                            "action": "move_to_breakeven",
+                            "success": broker_update.get("success", False),
+                        })
+
+        results.append(pos_result)
+
+    return {
+        "positions_checked": len(results),
+        "current_price": current_price,
+        "partial_closes_executed": total_closes,
+        "breakeven_moves_executed": total_breakevens,
+        "results": results,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/move-to-breakeven/{deal_id}")
+async def move_stop_to_breakeven(
+    deal_id: str,
+    update_broker: bool = True,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Move stop-loss to breakeven (entry price) for a position.
+
+    Typically called after TP1 is hit to lock in zero loss.
+    """
+    global position_manager, data_connector
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    position = position_manager.get_position(deal_id)
+    if position is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Position {deal_id} not found",
+        )
+
+    result = position_manager.move_stop_to_breakeven(deal_id)
+
+    broker_result = None
+    if result and result.get("moved") and update_broker:
+        if data_connector and hasattr(data_connector, "update_position"):
+            broker_result = data_connector.update_position(
+                deal_id=deal_id,
+                stop_loss=result["new_stop_loss"],
+            )
+
+    return {
+        **result,
+        "broker_update": broker_result,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 # Main entry point
 if __name__ == "__main__":
     import uvicorn

@@ -76,8 +76,8 @@
       ],
       "files": ["src/trading/position_manager.py", "src/data/capital_connector.py"],
       "dependencies": ["US-007"],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented 3-level partial TP (50/30/20% at 1x/2x/3x ATR), auto breakeven after TP1, partial close tracking"
     },
     {
       "id": "US-001",

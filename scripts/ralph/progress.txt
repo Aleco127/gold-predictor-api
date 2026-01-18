@@ -125,3 +125,32 @@ Branch: ralph/gold-predictor-v2
 - PositionManager is in-memory; positions should be re-added after restart
 - update_position calls Capital.com API with stopLevel/profitLevel
 - Trailing distance = current_atr * trailing_atr_multiplier
+
+### Iteration 4 - US-008: Partial Take-Profit Levels
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Updated `src/trading/position_manager.py`:
+  - Added calculate_partial_close_size() method
+  - Added record_partial_close() method with size tracking
+  - Added move_stop_to_breakeven() method
+  - Added process_tp_hit() method for processing TP actions
+  - Added get_partial_tp_config() method
+- Updated `src/api/server.py` - Added partial TP endpoints:
+  - `/api/partial-tp-config` - Get TP configuration
+  - `/api/calculate-tp-levels` - Calculate 3 TP levels from ATR
+  - `/api/setup-position-with-tp` - Track position with auto TP levels
+  - `/api/check-tp-levels/{deal_id}` - Check and execute partial closes
+  - `/api/check-all-tp-levels` - Batch check all positions
+  - `/api/move-to-breakeven/{deal_id}` - Move stop to entry price
+
+**Patterns Discovered:**
+- TP levels: 1x ATR (50%), 2x ATR (30%), 3x ATR (20%)
+- After TP1 hit: auto-move stop to breakeven
+- Partial close uses same close_position API with size parameter
+- Track remaining position size after each partial close
+
+**Notes:**
+- Default config: 50%/30%/20% at 1x/2x/3x ATR
+- Breakeven move only happens when it improves the stop (no backwards movement)
+- TP level tracking persists until position is removed
