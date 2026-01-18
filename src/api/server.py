@@ -33,6 +33,7 @@ from ..trading import (
 from ..data.economic_calendar import EconomicCalendar, ImpactLevel, NewsFilter, NewsFilterResult
 from ..data.news_fetcher import NewsFetcher, NewsArticle
 from ..features.sentiment_analyzer import SentimentAnalyzer, AggregateSentiment
+from ..storage.trade_database import TradeDatabase, TradeFilter, TradeSummary
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -45,6 +46,7 @@ economic_calendar: Optional[EconomicCalendar] = None
 news_filter: Optional[NewsFilter] = None
 news_fetcher: Optional[NewsFetcher] = None
 sentiment_analyzer: Optional[SentimentAnalyzer] = None
+trade_db: Optional[TradeDatabase] = None
 
 
 class PredictionRequest(BaseModel):
@@ -300,7 +302,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher, sentiment_analyzer, trade_db
 
     logger.info("Starting Gold Predictor API...")
 
@@ -424,6 +426,10 @@ async def lifespan(app: FastAPI):
             lazy_load=True,  # Model loaded on first use
         )
         logger.info("Sentiment analyzer initialized (lazy load)")
+
+        # Initialize trade database
+        trade_db = TradeDatabase(database_url="sqlite:///data/trades.db")
+        logger.info("Trade database initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -2423,6 +2429,410 @@ async def clear_sentiment_cache(api_key: str = Depends(verify_api_key)):
     result = sentiment_analyzer.clear_cache()
     result["timestamp"] = datetime.now().isoformat()
     return result
+
+
+# ============================================================================
+# Trade History Database Endpoints
+# ============================================================================
+
+
+@app.get("/api/trades")
+async def get_trades(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    direction: Optional[str] = None,
+    outcome: Optional[str] = None,
+    symbol: Optional[str] = None,
+    min_pnl: Optional[float] = None,
+    max_pnl: Optional[float] = None,
+    signal: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get trade history with optional filtering.
+
+    Returns list of trades sorted by opened_at (newest first).
+
+    Args:
+        start_date: Filter trades opened after this date (ISO format)
+        end_date: Filter trades opened before this date (ISO format)
+        direction: Filter by direction (BUY or SELL)
+        outcome: Filter by outcome (WIN, LOSS, BREAKEVEN, OPEN)
+        symbol: Filter by trading symbol
+        min_pnl: Filter trades with P&L >= min_pnl
+        max_pnl: Filter trades with P&L <= max_pnl
+        signal: Filter by signal type
+        limit: Maximum trades to return (default: 100)
+        offset: Offset for pagination
+    """
+    global trade_db
+
+    if trade_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trade database not initialized",
+        )
+
+    # Parse dates if provided
+    parsed_start = None
+    parsed_end = None
+    if start_date:
+        try:
+            parsed_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid start_date format. Use ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)",
+            )
+
+    if end_date:
+        try:
+            parsed_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid end_date format. Use ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)",
+            )
+
+    # Create filter
+    trade_filter = TradeFilter(
+        start_date=parsed_start,
+        end_date=parsed_end,
+        direction=direction,
+        outcome=outcome,
+        symbol=symbol,
+        min_pnl=min_pnl,
+        max_pnl=max_pnl,
+        signal=signal,
+        limit=limit,
+        offset=offset,
+    )
+
+    trades = trade_db.get_trades(trade_filter)
+
+    return {
+        "trades": trades,
+        "count": len(trades),
+        "limit": limit,
+        "offset": offset,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/trades/summary")
+async def get_trade_summary(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    symbol: Optional[str] = None,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get trade summary statistics.
+
+    Returns aggregate statistics including win rate, profit factor, and P&L metrics.
+
+    Args:
+        start_date: Start of period (ISO format)
+        end_date: End of period (ISO format)
+        symbol: Filter by trading symbol
+    """
+    global trade_db
+
+    if trade_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trade database not initialized",
+        )
+
+    # Parse dates if provided
+    parsed_start = None
+    parsed_end = None
+    if start_date:
+        try:
+            parsed_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid start_date format",
+            )
+
+    if end_date:
+        try:
+            parsed_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid end_date format",
+            )
+
+    summary = trade_db.get_summary(
+        start_date=parsed_start,
+        end_date=parsed_end,
+        symbol=symbol,
+    )
+
+    return {
+        **summary.to_dict(),
+        "period": {
+            "start_date": start_date,
+            "end_date": end_date,
+            "symbol": symbol,
+        },
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/trades/accuracy")
+async def get_prediction_accuracy(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get prediction accuracy statistics.
+
+    Returns accuracy metrics for model predictions vs actual outcomes.
+    Includes breakdown by signal type.
+    """
+    global trade_db
+
+    if trade_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trade database not initialized",
+        )
+
+    # Parse dates if provided
+    parsed_start = None
+    parsed_end = None
+    if start_date:
+        try:
+            parsed_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid start_date format",
+            )
+
+    if end_date:
+        try:
+            parsed_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid end_date format",
+            )
+
+    accuracy = trade_db.get_prediction_accuracy(
+        start_date=parsed_start,
+        end_date=parsed_end,
+    )
+
+    return {
+        **accuracy,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/trades/{deal_id}")
+async def get_trade(
+    deal_id: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get a single trade by deal ID.
+
+    Returns complete trade record or 404 if not found.
+    """
+    global trade_db
+
+    if trade_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trade database not initialized",
+        )
+
+    trade = trade_db.get_trade(deal_id)
+
+    if trade is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Trade with deal_id '{deal_id}' not found",
+        )
+
+    return {
+        "trade": trade,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/trades/log-open")
+async def log_trade_open(
+    deal_id: str,
+    direction: str,
+    size: float,
+    entry_price: float,
+    signal: str,
+    confidence: float,
+    deal_reference: Optional[str] = None,
+    symbol: str = "XAUUSD",
+    stop_loss: Optional[float] = None,
+    take_profit: Optional[float] = None,
+    predicted_price: Optional[float] = None,
+    sentiment_score: Optional[float] = None,
+    volatility_regime: Optional[str] = None,
+    news_paused: bool = False,
+    notes: Optional[str] = None,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Log a new trade opening.
+
+    Call this when a position is opened to start tracking the trade.
+    Records entry details, signal, and prediction for later analysis.
+    """
+    global trade_db
+
+    if trade_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trade database not initialized",
+        )
+
+    try:
+        record_id = trade_db.log_trade_open(
+            deal_id=deal_id,
+            direction=direction,
+            size=size,
+            entry_price=entry_price,
+            signal=signal,
+            confidence=confidence,
+            deal_reference=deal_reference,
+            symbol=symbol,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            predicted_price=predicted_price,
+            sentiment_score=sentiment_score,
+            volatility_regime=volatility_regime,
+            news_paused=news_paused,
+            notes=notes,
+        )
+
+        return {
+            "success": True,
+            "record_id": record_id,
+            "deal_id": deal_id,
+            "message": f"Trade {deal_id} logged successfully",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Error logging trade open: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to log trade: {str(e)}",
+        )
+
+
+@app.post("/api/trades/log-close")
+async def log_trade_close(
+    deal_id: str,
+    exit_price: float,
+    pnl: float,
+    pnl_pips: Optional[float] = None,
+    notes: Optional[str] = None,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Log trade closure.
+
+    Call this when a position is closed to record exit details and P&L.
+    Automatically calculates outcome (WIN/LOSS/BREAKEVEN) and prediction accuracy.
+    """
+    global trade_db
+
+    if trade_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trade database not initialized",
+        )
+
+    try:
+        trade = trade_db.log_trade_close(
+            deal_id=deal_id,
+            exit_price=exit_price,
+            pnl=pnl,
+            pnl_pips=pnl_pips,
+            notes=notes,
+        )
+
+        if trade is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Trade with deal_id '{deal_id}' not found",
+            )
+
+        return {
+            "success": True,
+            "trade": trade,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error logging trade close: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to log trade close: {str(e)}",
+        )
+
+
+@app.get("/api/trades/open")
+async def get_open_trades(api_key: str = Depends(verify_api_key)):
+    """
+    Get all open (unclosed) trades.
+
+    Returns list of trades that have not been closed yet.
+    """
+    global trade_db
+
+    if trade_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Trade database not initialized",
+        )
+
+    trades = trade_db.get_open_trades()
+
+    return {
+        "trades": trades,
+        "count": len(trades),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/trades/status")
+async def get_trade_db_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get trade database status.
+
+    Returns database info including total trades, open trades, and latest trade.
+    """
+    global trade_db
+
+    if trade_db is None:
+        return {
+            "configured": False,
+            "message": "Trade database not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    status_data = trade_db.get_status()
+    status_data["timestamp"] = datetime.now().isoformat()
+    return status_data
 
 
 # Main entry point

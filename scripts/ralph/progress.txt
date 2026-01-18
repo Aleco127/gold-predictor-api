@@ -301,3 +301,47 @@ Branch: ralph/gold-predictor-v2
 - Aggregate sentiment combines with news fetcher (requires NEWS_API_KEY)
 - BULLISH/BEARISH thresholds at +/-0.15 weighted score
 
+### Iteration 9 - US-011: Trade History Database
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/storage/trade_database.py` - Full TradeDatabase class with:
+  - TradeOutcome enum (WIN, LOSS, BREAKEVEN, OPEN)
+  - TradeRecord SQLAlchemy model with comprehensive fields:
+    - Trade identification: deal_id, deal_reference, symbol
+    - Trade details: direction, size, entry_price, exit_price, stop_loss, take_profit
+    - P&L fields: pnl, pnl_pips, pnl_percent
+    - Signal info: signal, confidence
+    - Prediction tracking: predicted_price, predicted_direction, actual_direction, prediction_correct
+    - Outcome and timestamps
+    - Context: sentiment_score, volatility_regime, news_paused, notes
+  - TradeFilter dataclass for query filtering
+  - TradeSummary dataclass with win_rate, profit_factor, average metrics
+  - Methods: log_trade_open, log_trade_close, get_trade, get_trades, get_summary, get_prediction_accuracy, get_open_trades, count_trades, get_status
+- Updated `src/api/server.py`:
+  - Added TradeDatabase import and global instance
+  - Initialize TradeDatabase in lifespan (sqlite:///data/trades.db)
+  - `/api/trades` - Get trade history with filtering (date range, direction, outcome, symbol, P&L range, signal)
+  - `/api/trades/summary` - Get trade summary statistics
+  - `/api/trades/accuracy` - Get prediction accuracy by signal type
+  - `/api/trades/{deal_id}` - Get single trade details
+  - `/api/trades/log-open` - Log trade opening
+  - `/api/trades/log-close` - Log trade closure with outcome calculation
+  - `/api/trades/open` - Get all open trades
+  - `/api/trades/status` - Get database status
+
+**Patterns Discovered:**
+- SQLAlchemy's declarative_base() with sessionmaker pattern
+- Context manager for session management (with self.SessionLocal() as session)
+- TradeOutcome calculated from P&L with small threshold (0.01) for breakeven
+- prediction_correct = predicted_direction == actual_direction
+- Profit factor = gross_profit / abs(gross_loss)
+- ISO format date parsing with Z -> +00:00 replacement for UTC
+
+**Notes:**
+- Database stored at data/trades.db (SQLite)
+- TradeRecord uses deal_id as unique key (same as Capital.com deal ID)
+- Outcome auto-calculated on trade close based on P&L
+- Prediction accuracy tracks direction (UP/DOWN) not exact price
+- Summary statistics exclude OPEN trades from win rate calculation
+
