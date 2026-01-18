@@ -37,6 +37,7 @@ from ..storage.trade_database import TradeDatabase, TradeFilter, TradeSummary
 from ..monitoring.performance_tracker import TradingPerformanceTracker, PerformanceMetrics, DrawdownInfo
 from ..features.multi_timeframe import MultiTimeframeAnalyzer, MultiTimeframeAnalysis, TimeframeData
 from ..storage.historical_data import HistoricalDataStore, DataRangeInfo
+from ..backtesting.backtest_engine import BacktestEngine, BacktestResult
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -53,6 +54,7 @@ trade_db: Optional[TradeDatabase] = None
 trading_performance_tracker: Optional[TradingPerformanceTracker] = None
 mtf_analyzer: Optional[MultiTimeframeAnalyzer] = None
 historical_store: Optional[HistoricalDataStore] = None
+backtest_engine: Optional[BacktestEngine] = None
 
 
 class PredictionRequest(BaseModel):
@@ -460,6 +462,16 @@ async def lifespan(app: FastAPI):
             data_connector=data_connector,
         )
         logger.info("Historical data store initialized")
+
+        # Initialize backtest engine (US-015)
+        backtest_engine = BacktestEngine(
+            historical_store=historical_store,
+            initial_balance=10000.0,
+            position_size_percent=2.0,
+            stop_loss_atr_multiplier=2.0,
+            take_profit_atr_multiplier=3.0,
+        )
+        logger.info("Backtest engine initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -3570,6 +3582,111 @@ async def delete_historical_data(
     return {
         "status": "success",
         "message": f"Deleted {symbol} {timeframe} data",
+    }
+
+
+# ============================================================================
+# Backtesting Endpoints (US-015)
+# ============================================================================
+
+
+class BacktestRequest(BaseModel):
+    """Request model for backtest."""
+    symbol: str = Field(default="XAUUSD", description="Trading symbol")
+    timeframe: str = Field(default="M5", description="Timeframe")
+    start_date: Optional[str] = Field(default=None, description="Start date (ISO format)")
+    end_date: Optional[str] = Field(default=None, description="End date (ISO format)")
+    initial_balance: float = Field(default=10000.0, ge=100, description="Starting balance")
+    position_size_percent: float = Field(default=2.0, ge=0.1, le=10, description="Position size %")
+    stop_loss_atr: float = Field(default=2.0, ge=0.5, le=5, description="Stop loss ATR multiplier")
+    take_profit_atr: float = Field(default=3.0, ge=1, le=10, description="Take profit ATR multiplier")
+
+
+@app.post("/api/backtest")
+async def run_backtest(
+    request: BacktestRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Run backtest on historical data.
+
+    Returns comprehensive backtest results including:
+    - Performance metrics (win rate, profit factor, Sharpe ratio, etc.)
+    - Trade list with entry/exit details
+    - Equity curve for visualization
+    """
+    global backtest_engine, historical_store
+
+    if backtest_engine is None or historical_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Backtest engine not initialized",
+        )
+
+    # Parse dates if provided
+    start_date = None
+    end_date = None
+    if request.start_date:
+        try:
+            start_date = datetime.fromisoformat(request.start_date.replace('Z', '+00:00'))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid start_date format: {request.start_date}",
+            )
+    if request.end_date:
+        try:
+            end_date = datetime.fromisoformat(request.end_date.replace('Z', '+00:00'))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid end_date format: {request.end_date}",
+            )
+
+    # Update engine parameters
+    backtest_engine.initial_balance = request.initial_balance
+    backtest_engine.position_size_percent = request.position_size_percent
+    backtest_engine.stop_loss_atr_multiplier = request.stop_loss_atr
+    backtest_engine.take_profit_atr_multiplier = request.take_profit_atr
+
+    try:
+        result = backtest_engine.run_backtest(
+            symbol=request.symbol.upper(),
+            timeframe=request.timeframe.upper(),
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return result.to_dict()
+
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No historical data found: {str(e)}. Download data first using /api/historical/download",
+        )
+    except Exception as e:
+        logger.error(f"Backtest error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Backtest failed: {str(e)}",
+        )
+
+
+@app.get("/api/backtest/status")
+async def get_backtest_status(
+    api_key: str = Depends(verify_api_key),
+):
+    """Get backtest engine status and configuration."""
+    global backtest_engine
+
+    if backtest_engine is None:
+        return {
+            "status": "not_initialized",
+            "message": "Backtest engine not initialized",
+        }
+
+    return {
+        "status": "ready",
+        "config": backtest_engine.get_status(),
     }
 
 

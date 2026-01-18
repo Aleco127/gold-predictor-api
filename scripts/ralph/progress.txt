@@ -552,3 +552,61 @@ Branch: ralph/gold-predictor-v2
 - Script designed for cron/Task Scheduler daily execution
 - --multiple-timeframes flag downloads M5, M15, H1, H4 together
 
+### Iteration 15 - US-015: Backtesting Engine
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/backtesting/backtest_engine.py`:
+  - BacktestTrade dataclass with:
+    - Entry/exit time, direction, prices, size
+    - P&L (absolute and percent)
+    - Signal confidence, exit reason, bars held
+    - Max favorable/adverse excursion (MFE/MAE)
+    - to_dict() for JSON serialization
+  - BacktestMetrics dataclass with 25+ metrics:
+    - Basic: total_trades, winning/losing, win_rate
+    - Profit: profit_factor, total_pnl, average_win/loss, largest_win/loss
+    - Risk: max_drawdown, Sharpe/Sortino/Calmar ratios
+    - Efficiency: expectancy, recovery_factor, risk_reward_ratio
+    - Duration: avg_bars_held, avg_winning/losing_bars
+    - Streaks: consecutive_wins/losses
+  - BacktestResult dataclass with full results:
+    - Symbol, timeframe, date range
+    - Initial/final balance, metrics, trades list
+    - Equity curve for visualization
+    - Parameters used, run time
+  - BacktestEngine class:
+    - Configurable: initial_balance, position_size_percent, SL/TP ATR multipliers
+    - Configurable: max_positions, commission_percent, slippage_percent
+    - run_backtest() main entry point with date range filtering
+    - _default_signal_generator() using EMA crossover + RSI + MACD + BB
+    - _simulate_trades() bar-by-bar simulation with SL/TP checks
+    - _close_position() creates trade records with MFE/MAE
+    - _calculate_metrics() computes all performance metrics
+    - get_status() returns engine configuration
+- Updated `src/backtesting/__init__.py`:
+  - Exported BacktestEngine, BacktestResult, BacktestMetrics, BacktestTrade
+- Updated `src/api/server.py`:
+  - Added BacktestEngine import and global instance
+  - Initialized backtest_engine in lifespan
+  - BacktestRequest model with all configurable parameters
+  - POST `/api/backtest` - Run backtest with parameters
+  - GET `/api/backtest/status` - Get engine configuration
+
+**Patterns Discovered:**
+- Signal scoring: combine multiple indicators (EMA, RSI, MACD, BB) with points
+- Normalized score: total_points / max_points for signal confidence
+- Equity tracking: balance (realized) vs equity (unrealized included)
+- Drawdown: (peak - current) / peak * 100 for percent
+- Sharpe annualization: mean_return * 252, std * sqrt(252)
+- Sortino uses only negative returns for downside deviation
+
+**Notes:**
+- Default signal requires 0.4+ normalized score to trade
+- EMA alignment (EMA9 > EMA21 > EMA50) = bullish trend
+- RSI thresholds: <30 oversold, >70 overbought
+- Price below BB lower band = oversold
+- Commission/slippage applied on entry and exit
+- MFE/MAE track best/worst during trade for analysis
+- Equity curve records position status at each bar
+

@@ -280,8 +280,8 @@
       ],
       "files": ["src/backtesting/backtest_engine.py", "src/api/server.py"],
       "dependencies": ["US-014"],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented BacktestEngine with: BacktestTrade/BacktestMetrics/BacktestResult dataclasses, default signal generator (EMA crossover + RSI + MACD + BB), configurable SL/TP via ATR multipliers, position sizing, commission/slippage, equity curve tracking, comprehensive metrics (win rate, profit factor, Sharpe/Sortino/Calmar ratios, max drawdown, expectancy, consecutive wins/losses, recovery factor). API endpoints: POST /api/backtest, GET /api/backtest/status"
     },
     {
       "id": "US-016",
