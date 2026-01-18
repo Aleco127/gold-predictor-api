@@ -133,8 +133,8 @@
       ],
       "files": ["src/data/news_fetcher.py", "src/api/server.py", "src/config.py", ".env.example"],
       "dependencies": [],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented NewsFetcher class with NewsAPI integration, gold/macro keywords, caching, and API endpoints (/api/news, /api/news/headlines, /api/news/status, /api/news/refresh)"
     },
     {
       "id": "US-004",

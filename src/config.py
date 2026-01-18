@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     lstm_weight: float = 0.6
     xgb_weight: float = 0.4
 
+    # News API Configuration
+    news_api_key: str = ""  # NewsAPI.org API key for news fetching
+    news_cache_duration_minutes: int = 30  # How long to cache news articles
+
     # Risk Management
     daily_loss_limit_pct: float = 3.0  # Max daily loss as % of account
     max_daily_trades: int = 50  # Max trades per day

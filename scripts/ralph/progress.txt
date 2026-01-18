@@ -226,3 +226,40 @@ Branch: ralph/gold-predictor-v2
 - news_filter field only included in response when paused (saves bandwidth)
 - n8n workflow shows event details in Telegram when paused
 
+### Iteration 7 - US-003: News Sentiment API Integration
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/data/news_fetcher.py` - Full NewsFetcher class with:
+  - NewsArticle dataclass with to_dict() serialization
+  - NewsAPI integration for fetching financial news
+  - Gold keywords: gold, XAUUSD, precious metals, gold price, gold market
+  - Macro keywords: Federal Reserve, Fed, interest rate, inflation, CPI, etc.
+  - Async HTTP client with httpx for API calls
+  - Caching with configurable duration (default 30 minutes)
+  - Methods: fetch_news, get_recent_headlines, get_articles_by_keyword, get_headlines_for_sentiment
+- Updated `src/config.py` - Added news API settings:
+  - news_api_key: NewsAPI.org API key
+  - news_cache_duration_minutes: Cache duration (default 30)
+- Updated `.env.example` - Added NEWS_API_KEY and NEWS_CACHE_DURATION_MINUTES
+- Updated `src/api/server.py`:
+  - Added NewsFetcher import and global instance
+  - Initialize NewsFetcher in lifespan (if API key configured)
+  - `/api/news` - Get recent news with filtering by hours, count, keyword
+  - `/api/news/headlines` - Get headlines formatted for sentiment analysis
+  - `/api/news/status` - Get news fetcher status and cache info
+  - `/api/news/refresh` - Force refresh news from API
+
+**Patterns Discovered:**
+- NewsAPI uses /v2/everything endpoint for historical search
+- Query parameter uses "OR" for multiple keywords
+- Date format: YYYY-MM-DDTHH:MM:SS for "from" parameter
+- Free tier limited to last 24 hours of news
+- httpx.AsyncClient for async HTTP requests with proper timeout
+
+**Notes:**
+- NEWS_API_KEY must be configured for news fetcher to work
+- If no API key, fetcher is skipped in lifespan (graceful degradation)
+- get_headlines_for_sentiment() returns simplified format for FinBERT
+- Cache prevents hitting API rate limits (NewsAPI free: 100 requests/day)
+

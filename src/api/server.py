@@ -31,6 +31,7 @@ from ..trading import (
     TrailingStopUpdate,
 )
 from ..data.economic_calendar import EconomicCalendar, ImpactLevel, NewsFilter, NewsFilterResult
+from ..data.news_fetcher import NewsFetcher, NewsArticle
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -41,6 +42,7 @@ risk_manager: Optional[RiskManager] = None
 position_manager: Optional[PositionManager] = None
 economic_calendar: Optional[EconomicCalendar] = None
 news_filter: Optional[NewsFilter] = None
+news_fetcher: Optional[NewsFetcher] = None
 
 
 class PredictionRequest(BaseModel):
@@ -296,7 +298,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter, news_fetcher
 
     logger.info("Starting Gold Predictor API...")
 
@@ -402,6 +404,17 @@ async def lifespan(app: FastAPI):
             pause_minutes_after=30,
         )
         logger.info("News filter initialized")
+
+        # Initialize news fetcher for sentiment analysis
+        if settings.news_api_key:
+            news_fetcher = NewsFetcher(
+                api_key=settings.news_api_key,
+                cache_duration_minutes=settings.news_cache_duration_minutes,
+            )
+            await news_fetcher.fetch_news()
+            logger.info("News fetcher initialized with API key")
+        else:
+            logger.warning("NEWS_API_KEY not configured, news fetcher disabled")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -2095,6 +2108,136 @@ async def get_news_filter_config(api_key: str = Depends(verify_api_key)):
 
     return {
         **news_filter.get_config(),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+# ============================================================================
+# News API Endpoints (for Sentiment Analysis)
+# ============================================================================
+
+
+@app.get("/api/news")
+async def get_news(
+    hours: int = 24,
+    max_count: int = 50,
+    keyword: Optional[str] = None,
+    force_refresh: bool = False,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get gold-related financial news.
+
+    Returns recent news articles for gold, Federal Reserve, inflation, and related topics.
+    Used as input for sentiment analysis.
+
+    Args:
+        hours: How many hours back to look (default: 24)
+        max_count: Maximum articles to return (default: 50)
+        keyword: Optional keyword to filter articles
+        force_refresh: Force fetch fresh news from API
+    """
+    global news_fetcher
+
+    if news_fetcher is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="News fetcher not initialized. Configure NEWS_API_KEY in environment.",
+        )
+
+    # Fetch fresh news if needed
+    if force_refresh:
+        await news_fetcher.fetch_news(force_refresh=True)
+
+    # Get articles
+    if keyword:
+        articles = news_fetcher.get_articles_by_keyword(keyword, max_count=max_count)
+    else:
+        articles = news_fetcher.get_recent_headlines(hours=hours, max_count=max_count)
+
+    return {
+        "articles": [a.to_dict() for a in articles],
+        "count": len(articles),
+        "hours": hours,
+        "keyword": keyword,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/news/headlines")
+async def get_headlines(
+    hours: int = 4,
+    max_count: int = 20,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get headlines formatted for sentiment analysis.
+
+    Returns concise list of recent headlines with title, source, and timestamp.
+    Optimized for FinBERT sentiment scoring.
+    """
+    global news_fetcher
+
+    if news_fetcher is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="News fetcher not initialized. Configure NEWS_API_KEY in environment.",
+        )
+
+    headlines = await news_fetcher.get_headlines_for_sentiment(
+        hours=hours,
+        max_count=max_count,
+    )
+
+    return {
+        "headlines": headlines,
+        "count": len(headlines),
+        "hours": hours,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/news/status")
+async def get_news_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get news fetcher status.
+
+    Returns configuration, cache status, and article count.
+    """
+    global news_fetcher
+
+    if news_fetcher is None:
+        return {
+            "configured": False,
+            "message": "News fetcher not initialized. Set NEWS_API_KEY in environment.",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    status_data = news_fetcher.get_status()
+    status_data["timestamp"] = datetime.now().isoformat()
+    return status_data
+
+
+@app.post("/api/news/refresh")
+async def refresh_news(api_key: str = Depends(verify_api_key)):
+    """
+    Force refresh news from API.
+
+    Fetches fresh articles regardless of cache state.
+    """
+    global news_fetcher
+
+    if news_fetcher is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="News fetcher not initialized. Configure NEWS_API_KEY in environment.",
+        )
+
+    articles = await news_fetcher.fetch_news(force_refresh=True)
+
+    return {
+        "refreshed": True,
+        "articles_fetched": len(articles),
         "timestamp": datetime.now().isoformat(),
     }
 
