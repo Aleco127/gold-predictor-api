@@ -631,7 +631,12 @@ class LSTMTrainer:
                 "input_size": self.model.input_size,
                 "hidden_size": self.model.hidden_size,
                 "num_layers": self.model.num_layers,
+                "dropout": self.model.dropout,
                 "bidirectional": self.model.bidirectional,
+                "use_layer_norm": self.model.use_layer_norm,
+                "use_batch_norm": self.model.use_batch_norm,
+                "use_attention": self.model.use_attention,
+                "use_residual": self.model.use_residual,
             },
             "train_losses": self.train_losses,
             "val_losses": self.val_losses,
@@ -653,14 +658,27 @@ class LSTMTrainer:
         """
         checkpoint = torch.load(path, map_location="cpu")
         config = checkpoint["model_config"]
+        state_dict = checkpoint["model_state_dict"]
+
+        # Infer architecture from state_dict keys if not in config
+        # This handles models saved with older save_model() versions
+        has_attention = any(k.startswith("attention.") for k in state_dict.keys())
+        has_layer_norm = any(k.startswith("layer_norm.") for k in state_dict.keys())
+        has_batch_norm = any(k.startswith("batch_norm.") for k in state_dict.keys())
+        has_residual = any(k.startswith("residual_proj.") for k in state_dict.keys())
 
         model = GoldLSTM(
             input_size=config["input_size"],
             hidden_size=config["hidden_size"],
             num_layers=config["num_layers"],
-            bidirectional=config["bidirectional"],
+            dropout=config.get("dropout", 0.35),
+            bidirectional=config.get("bidirectional", False),
+            use_layer_norm=config.get("use_layer_norm", has_layer_norm),
+            use_batch_norm=config.get("use_batch_norm", has_batch_norm),
+            use_attention=config.get("use_attention", has_attention),
+            use_residual=config.get("use_residual", has_residual),
         )
-        model.load_state_dict(checkpoint["model_state_dict"])
+        model.load_state_dict(state_dict)
 
         trainer = cls(model, device=device)
         trainer.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -669,5 +687,7 @@ class LSTMTrainer:
         trainer.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
 
         logger.info(f"Model loaded from {path}")
+        if has_attention or has_layer_norm:
+            logger.info(f"Inferred architecture: attention={has_attention}, layer_norm={has_layer_norm}")
 
         return model, trainer
