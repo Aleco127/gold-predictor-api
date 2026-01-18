@@ -83,3 +83,45 @@ Branch: ralph/gold-predictor-v2
 **Notes:**
 - Position size is rounded to 2 decimal places for standard lot sizing
 - Volatility sizing can be disabled with use_volatility_sizing=False
+
+### Iteration 3 - US-007: Trailing Stop-Loss Implementation
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Updated `src/config.py` - Added trailing stop settings:
+  - trailing_stop_atr_multiplier (1.5x default)
+  - trailing_activation_pips (10 pips default)
+  - trailing_step_pips (5 pips minimum step)
+- Created `src/trading/position_manager.py` - Full PositionManager class with:
+  - TrackedPosition dataclass for position tracking state
+  - TrailingStopUpdate dataclass for update recommendations
+  - PositionDirection enum (BUY/SELL)
+  - Position tracking with highest/lowest price history
+  - Trailing stop calculation with activation threshold
+  - Minimum step size enforcement
+  - Take-profit level calculation
+- Updated `src/trading/__init__.py` - Exported new classes
+- Updated `src/data/capital_connector.py` - Added update_position() method for modifying SL/TP via API
+- Updated `src/api/server.py`:
+  - Added PositionManager initialization in lifespan
+  - Added response models: TrackedPositionResponse, TrailingStopUpdateResponse, TrailingStopConfigResponse
+  - Added request models: AddPositionRequest, UpdateTrailingStopRequest
+  - `/api/trailing-stop-config` - Get trailing stop configuration
+  - `/api/track-position` POST - Add position to tracker
+  - `/api/track-position/{deal_id}` DELETE - Remove position from tracker
+  - `/api/tracked-positions` - List all tracked positions
+  - `/api/tracked-position/{deal_id}` - Get single position status
+  - `/api/update-trailing-stop` - Calculate and apply trailing stop update
+  - `/api/update-all-trailing-stops` - Batch update all positions
+
+**Patterns Discovered:**
+- Trailing stops track highest/lowest price since entry
+- Activation requires profit >= activation_pips before trailing begins
+- Stop moves only in favorable direction (up for BUY, down for SELL)
+- Minimum step prevents excessive API calls for small movements
+- Capital.com uses PUT to /positions/{deal_id} for updates
+
+**Notes:**
+- PositionManager is in-memory; positions should be re-added after restart
+- update_position calls Capital.com API with stopLevel/profitLevel
+- Trailing distance = current_atr * trailing_atr_multiplier

@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     volatility_low_threshold: float = 0.7  # ATR multiplier for low volatility (increase size)
     volatility_lookback: int = 20  # Periods for average ATR calculation
 
+    # Trailing Stop Configuration
+    trailing_stop_atr_multiplier: float = 1.5  # Trailing distance as ATR multiplier
+    trailing_activation_pips: float = 10.0  # Pips in profit before trailing activates
+    trailing_step_pips: float = 5.0  # Minimum pips to move stop by
+
     # Feature Configuration
     rsi_period: int = 14
     macd_fast: int = 12

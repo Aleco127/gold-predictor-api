@@ -23,7 +23,13 @@ from ..data.capital_connector import CapitalConnector
 from ..features.technical_indicators import TechnicalIndicators
 from ..models.ensemble import EnsemblePredictor, Signal
 from ..preprocessing.data_processor import DataProcessor
-from ..trading import RiskManager, DailyStats, PositionSizeResult
+from ..trading import (
+    RiskManager,
+    DailyStats,
+    PositionSizeResult,
+    PositionManager,
+    TrailingStopUpdate,
+)
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -31,6 +37,7 @@ data_processor: Optional[DataProcessor] = None
 data_connector = None  # Either MT5Connector or CapitalConnector
 indicator_calculator: Optional[TechnicalIndicators] = None
 risk_manager: Optional[RiskManager] = None
+position_manager: Optional[PositionManager] = None
 
 
 class PredictionRequest(BaseModel):
@@ -169,6 +176,66 @@ class PositionSizingConfigResponse(BaseModel):
     volatility_lookback: int
 
 
+class TrackedPositionResponse(BaseModel):
+    """Response model for tracked position with trailing stop info."""
+    deal_id: str
+    direction: str
+    symbol: str
+    size: float
+    entry_price: float
+    current_price: float
+    current_stop_loss: float
+    original_stop_loss: float
+    take_profit: Optional[float]
+    pnl_pips: float
+    trailing_activated: bool
+    highest_price: Optional[float] = None
+    lowest_price: Optional[float] = None
+    tp_levels: list = []
+    tp_levels_hit: list = []
+    opened_at: str
+    last_stop_update: Optional[str] = None
+
+
+class TrailingStopUpdateResponse(BaseModel):
+    """Response model for trailing stop calculation."""
+    should_update: bool
+    new_stop_loss: float
+    current_price: float
+    profit_pips: float
+    reason: str
+    api_update_result: Optional[dict] = None
+
+
+class TrailingStopConfigResponse(BaseModel):
+    """Response model for trailing stop configuration."""
+    trailing_atr_multiplier: float
+    activation_pips: float
+    step_pips: float
+    pip_value: float
+    tracked_positions_count: int
+
+
+class AddPositionRequest(BaseModel):
+    """Request model for adding a position to track."""
+    deal_id: str
+    direction: str
+    entry_price: float
+    stop_loss: float
+    take_profit: Optional[float] = None
+    size: float
+    symbol: str = "XAUUSD"
+    entry_atr: float = 0.0
+
+
+class UpdateTrailingStopRequest(BaseModel):
+    """Request model for updating trailing stop."""
+    deal_id: str
+    current_price: float
+    current_atr: Optional[float] = None
+    apply_to_broker: bool = True  # Whether to update stop-loss via API
+
+
 # API Key security
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -203,7 +270,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager
 
     logger.info("Starting Gold Predictor API...")
 
@@ -283,6 +350,15 @@ async def lifespan(app: FastAPI):
             volatility_lookback=settings.volatility_lookback,
         )
         logger.info("Risk manager initialized with position sizing")
+
+        # Initialize position manager for trailing stops
+        position_manager = PositionManager(
+            trailing_atr_multiplier=settings.trailing_stop_atr_multiplier,
+            activation_pips=settings.trailing_activation_pips,
+            step_pips=settings.trailing_step_pips,
+            pip_value=0.01,  # Gold pip value
+        )
+        logger.info("Position manager initialized for trailing stops")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -1067,6 +1143,341 @@ async def calculate_position_size(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Calculation failed: {str(e)}",
         )
+
+
+# ============================================================================
+# Trailing Stop Management Endpoints
+# ============================================================================
+
+
+@app.get("/api/trailing-stop-config", response_model=TrailingStopConfigResponse)
+async def get_trailing_stop_config(api_key: str = Depends(verify_api_key)):
+    """
+    Get current trailing stop configuration.
+
+    Returns trailing stop settings including ATR multiplier, activation threshold, and step size.
+    """
+    global position_manager
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    config = position_manager.get_config()
+    return TrailingStopConfigResponse(**config)
+
+
+@app.post("/api/track-position")
+async def track_position(
+    request: AddPositionRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Add a position to the trailing stop tracker.
+
+    Call this after opening a position to enable trailing stop management.
+    """
+    global position_manager
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    position = position_manager.add_position(
+        deal_id=request.deal_id,
+        direction=request.direction,
+        entry_price=request.entry_price,
+        stop_loss=request.stop_loss,
+        take_profit=request.take_profit,
+        size=request.size,
+        symbol=request.symbol,
+        entry_atr=request.entry_atr,
+    )
+
+    return {
+        "success": True,
+        "deal_id": position.deal_id,
+        "message": f"Position {position.deal_id} now being tracked",
+        "trailing_activated": position.trailing_activated,
+        "current_stop_loss": position.current_stop_loss,
+    }
+
+
+@app.delete("/api/track-position/{deal_id}")
+async def untrack_position(
+    deal_id: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Remove a position from the trailing stop tracker.
+
+    Call this when a position is closed to clean up tracking.
+    """
+    global position_manager
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    position = position_manager.remove_position(deal_id)
+
+    if position is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Position {deal_id} not found in tracker",
+        )
+
+    return {
+        "success": True,
+        "deal_id": deal_id,
+        "message": f"Position {deal_id} removed from tracking",
+    }
+
+
+@app.get("/api/tracked-positions")
+async def list_tracked_positions(
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    List all positions being tracked for trailing stops.
+
+    Returns summary of all tracked positions with their current trailing stop status.
+    """
+    global position_manager, data_connector
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    positions = position_manager.get_all_positions()
+
+    # Try to get current price for status calculation
+    current_price = None
+    if data_connector is not None:
+        try:
+            df = data_connector.get_ohlcv(bars=1)
+            if not df.empty:
+                current_price = float(df["close"].iloc[-1])
+        except Exception:
+            pass
+
+    results = []
+    for pos in positions:
+        if current_price:
+            status = position_manager.get_position_status(pos.deal_id, current_price)
+            results.append(status)
+        else:
+            results.append({
+                "deal_id": pos.deal_id,
+                "direction": pos.direction.value,
+                "symbol": pos.symbol,
+                "entry_price": pos.entry_price,
+                "current_stop_loss": pos.current_stop_loss,
+                "trailing_activated": pos.trailing_activated,
+            })
+
+    return {
+        "tracked_positions": results,
+        "count": len(results),
+        "current_price": current_price,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/tracked-position/{deal_id}", response_model=TrackedPositionResponse)
+async def get_tracked_position(
+    deal_id: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Get detailed status of a tracked position.
+
+    Returns comprehensive position info including trailing stop status and P&L.
+    """
+    global position_manager, data_connector
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    position = position_manager.get_position(deal_id)
+    if position is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Position {deal_id} not found",
+        )
+
+    # Get current price
+    current_price = position.entry_price  # Default to entry if can't get live
+    if data_connector is not None:
+        try:
+            df = data_connector.get_ohlcv(bars=1)
+            if not df.empty:
+                current_price = float(df["close"].iloc[-1])
+        except Exception:
+            pass
+
+    status = position_manager.get_position_status(deal_id, current_price)
+    return TrackedPositionResponse(**status)
+
+
+@app.post("/api/update-trailing-stop", response_model=TrailingStopUpdateResponse)
+async def update_trailing_stop(
+    request: UpdateTrailingStopRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Calculate and optionally apply trailing stop update for a position.
+
+    Checks if stop-loss should be moved based on current price.
+    If apply_to_broker is True and update is needed, calls Capital.com API to update.
+    """
+    global position_manager, data_connector
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    # Calculate trailing stop update
+    update = position_manager.calculate_trailing_stop(
+        deal_id=request.deal_id,
+        current_price=request.current_price,
+        current_atr=request.current_atr,
+    )
+
+    api_result = None
+
+    # Apply to broker if requested and update is needed
+    if request.apply_to_broker and update.should_update:
+        if data_connector is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Data connector not initialized for broker updates",
+            )
+
+        # Check if it's Capital.com connector with update method
+        if hasattr(data_connector, "update_position"):
+            api_result = data_connector.update_position(
+                deal_id=request.deal_id,
+                stop_loss=update.new_stop_loss,
+            )
+
+            if api_result.get("success"):
+                # Update local tracking
+                position_manager.apply_stop_update(request.deal_id, update.new_stop_loss)
+        else:
+            api_result = {"success": False, "error": "Broker update not supported"}
+
+    return TrailingStopUpdateResponse(
+        should_update=update.should_update,
+        new_stop_loss=update.new_stop_loss,
+        current_price=update.current_price,
+        profit_pips=update.profit_pips,
+        reason=update.reason,
+        api_update_result=api_result,
+    )
+
+
+@app.post("/api/update-all-trailing-stops")
+async def update_all_trailing_stops(
+    apply_to_broker: bool = True,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Check and update trailing stops for all tracked positions.
+
+    Fetches current price and ATR, then processes all tracked positions.
+    Returns list of positions with update results.
+    """
+    global position_manager, data_connector, indicator_calculator
+
+    if position_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position manager not initialized",
+        )
+
+    if data_connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Data connector not initialized",
+        )
+
+    positions = position_manager.get_all_positions()
+    if not positions:
+        return {
+            "message": "No positions being tracked",
+            "updates": [],
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # Get current price and ATR
+    try:
+        df = data_connector.get_ohlcv(bars=50)
+        df = indicator_calculator.calculate_all(df)
+        current_price = float(df["close"].iloc[-1])
+        current_atr = float(df["atr"].iloc[-1]) if "atr" in df.columns else None
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get market data: {str(e)}",
+        )
+
+    results = []
+    for pos in positions:
+        # Calculate trailing stop update
+        update = position_manager.calculate_trailing_stop(
+            deal_id=pos.deal_id,
+            current_price=current_price,
+            current_atr=current_atr,
+        )
+
+        result = {
+            "deal_id": pos.deal_id,
+            "direction": pos.direction.value,
+            "should_update": update.should_update,
+            "new_stop_loss": update.new_stop_loss,
+            "profit_pips": update.profit_pips,
+            "reason": update.reason,
+            "api_result": None,
+        }
+
+        # Apply to broker if needed
+        if apply_to_broker and update.should_update:
+            if hasattr(data_connector, "update_position"):
+                api_result = data_connector.update_position(
+                    deal_id=pos.deal_id,
+                    stop_loss=update.new_stop_loss,
+                )
+                result["api_result"] = api_result
+
+                if api_result.get("success"):
+                    position_manager.apply_stop_update(pos.deal_id, update.new_stop_loss)
+
+        results.append(result)
+
+    updates_applied = sum(1 for r in results if r.get("api_result", {}).get("success"))
+
+    return {
+        "positions_checked": len(results),
+        "updates_applied": updates_applied,
+        "current_price": current_price,
+        "current_atr": current_atr,
+        "updates": results,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 # Main entry point

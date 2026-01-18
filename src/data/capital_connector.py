@@ -1085,6 +1085,85 @@ class CapitalConnector:
             logger.error(f"Network error closing position: {e}")
             return {"success": False, "error": str(e)}
 
+    def update_position(
+        self,
+        deal_id: str,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        trailing_stop: Optional[bool] = None,
+        trailing_stop_distance: Optional[float] = None,
+    ) -> Dict:
+        """
+        Update an existing position's stop-loss or take-profit.
+
+        Args:
+            deal_id: The deal ID of the position to update
+            stop_loss: New stop-loss level (None = no change)
+            take_profit: New take-profit level (None = no change)
+            trailing_stop: Enable/disable trailing stop
+            trailing_stop_distance: Distance for trailing stop
+
+        Returns:
+            Dict with update confirmation
+        """
+        self._ensure_connected()
+        self._rate_limit()
+
+        if stop_loss is None and take_profit is None and trailing_stop is None:
+            return {"success": False, "error": "No update parameters provided"}
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                headers = self._auth_headers()
+
+                payload: Dict = {}
+                if stop_loss is not None:
+                    payload["stopLevel"] = stop_loss
+                if take_profit is not None:
+                    payload["profitLevel"] = take_profit
+                if trailing_stop is not None:
+                    payload["trailingStop"] = trailing_stop
+                if trailing_stop_distance is not None:
+                    payload["trailingStopDistance"] = trailing_stop_distance
+
+                logger.info(f"Updating position {deal_id}: {payload}")
+
+                response = client.put(
+                    f"{self.base_url}/positions/{deal_id}",
+                    headers=headers,
+                    json=payload,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    deal_ref = data.get("dealReference")
+                    logger.info(f"Position updated: {deal_id} - Ref: {deal_ref}")
+
+                    # Get deal confirmation
+                    confirmation = self._get_deal_confirmation(deal_ref)
+                    return {
+                        "success": True,
+                        "deal_reference": deal_ref,
+                        "deal_id": deal_id,
+                        "status": confirmation.get("dealStatus"),
+                        "new_stop_loss": stop_loss,
+                        "new_take_profit": take_profit,
+                    }
+
+                else:
+                    error_data = response.json() if response.content else {}
+                    error_msg = error_data.get("errorCode", response.text)
+                    logger.error(f"Failed to update position: {response.status_code} - {error_msg}")
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "status_code": response.status_code,
+                    }
+
+        except httpx.RequestError as e:
+            logger.error(f"Network error updating position: {e}")
+            return {"success": False, "error": str(e)}
+
     def close_all_positions(self, symbol: Optional[str] = None) -> List[Dict]:
         """
         Close all open positions (optionally filtered by symbol).
