@@ -1,0 +1,17 @@
+{
+  "lstm_weight": 0.5,
+  "xgb_weight": 0.5,
+  "lstm_params": {
+    "input_size": 30,
+    "hidden_size": 128,
+    "num_layers": 2,
+    "dropout": 0.35,
+    "use_attention": true,
+    "use_layer_norm": true
+  },
+  "use_stacking": true,
+  "trained_at": "2026-01-18T07:23:33.713881",
+  "training_samples": 22271,
+  "validation_samples": 2344,
+  "best_lstm_loss": 0.02721238174893409
+}

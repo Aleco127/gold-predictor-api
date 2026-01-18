@@ -1,0 +1,10 @@
+{
+  "direction_accuracy": 0.6294243070362473,
+  "test_mae": 0.39844116150475833,
+  "lstm_best_loss": 0.02721238174893409,
+  "ensemble_weights": [
+    0.5,
+    0.5
+  ],
+  "training_time": "0:15:21.711300"
+}
