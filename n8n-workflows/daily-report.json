@@ -1,0 +1,248 @@
+{
+  "name": "Gold Daily Performance Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger-daily-22utc",
+      "name": "Daily 22:00 UTC (Mon-Fri)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [-800, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if today is a trading day\n// Gold trades Monday-Friday\n// Skip weekends and major holidays\n\nconst now = new Date();\nconst dayOfWeek = now.getUTCDay(); // 0=Sunday, 6=Saturday\n\n// Check if it's a weekend (should not happen with cron, but safety check)\nconst isTradingDay = dayOfWeek >= 1 && dayOfWeek <= 5;\n\n// List of major market holidays (add more as needed)\nconst holidays = [\n    '01-01', // New Year's Day\n    '12-25', // Christmas\n    '12-26', // Boxing Day\n];\n\nconst monthDay = `${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;\nconst isHoliday = holidays.includes(monthDay);\n\nreturn [{\n    json: {\n        is_trading_day: isTradingDay && !isHoliday,\n        day_of_week: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek],\n        date: now.toISOString().split('T')[0],\n        is_holiday: isHoliday,\n        reason: isHoliday ? 'Market Holiday' : (isTradingDay ? 'Trading Day' : 'Weekend')\n    }\n}];"
+      },
+      "id": "check-trading-day",
+      "name": "Check Trading Day",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-580, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-is-trading-day",
+              "leftValue": "={{ $json.is_trading_day }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-trading-day-check",
+      "name": "Is Trading Day?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-360, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gold-predictor:8000/api/daily-report",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "format",
+              "value": "telegram"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "gp_sk_live_2026_gold_predictor_secure"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "get-daily-report",
+      "name": "Get Daily Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [-140, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-has-trades",
+              "leftValue": "={{ $json.today.trades_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-trades-check",
+      "name": "Had Trades Today?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [80, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "6074722648",
+        "text": "={{ $json.telegram_message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-daily-report",
+      "name": "Send Daily Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [320, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "TradingBotCred01",
+          "name": "Telegram Trading Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "6074722648",
+        "text": "=📊 **GOLD DAILY REPORT** 📊\n📅 {{$json.report_date}}\n\n😴 No trades executed today.\n\n━━━━━━━━━━━━━━━━━━━━\n📈 **ALL-TIME STATS**\n━━━━━━━━━━━━━━━━━━━━\n🔢 Total Trades: {{$json.all_time.total_trades}}\n🎯 Win Rate: {{$json.all_time.win_rate}}%\n💵 Total P&L: ${{$json.all_time.total_pnl}}\n📊 Profit Factor: {{$json.all_time.profit_factor}}\n\n━━━━━━━━━━━━━━━━━━━━\n💼 **ACCOUNT STATUS**\n━━━━━━━━━━━━━━━━━━━━\n💰 Equity: ${{$json.equity.current_equity}}\n📉 Max Drawdown: {{$json.drawdown.max_drawdown_pct}}%\n\n🤖 _Gold Predictor Bot_\n⏰ {{$json.report_time_utc}} UTC",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-no-trades-report",
+      "name": "Send No Trades Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [320, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TradingBotCred01",
+          "name": "Telegram Trading Bot"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "skip-weekend",
+      "name": "Skip (Not Trading Day)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-140, 380]
+    }
+  ],
+  "connections": {
+    "Daily 22:00 UTC (Mon-Fri)": {
+      "main": [
+        [
+          {
+            "node": "Check Trading Day",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Trading Day": {
+      "main": [
+        [
+          {
+            "node": "Is Trading Day?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Trading Day?": {
+      "main": [
+        [
+          {
+            "node": "Get Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip (Not Trading Day)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Had Trades Today?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Had Trades Today?": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send No Trades Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "pinData": {}
+}

@@ -384,3 +384,36 @@ Branch: ralph/gold-predictor-v2
 - Breakeven threshold: 0.01 (trades with |P&L| < 0.01 are breakeven)
 - BULLISH/BEARISH thresholds at ±0.15 weighted sentiment score
 
+### Iteration 11 - US-013: Daily Performance Telegram Report
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Updated `src/api/server.py`:
+  - Added `/api/daily-report` endpoint with `format` parameter ("json" or "telegram")
+  - Returns comprehensive daily report:
+    - Today's trades summary (count, W/L, win rate, P&L, best/worst trade)
+    - All-time metrics (total trades, win rate, profit factor, Sharpe, expectancy)
+    - Equity status (initial balance, current equity, change, change %)
+    - Drawdown metrics (max drawdown, current drawdown)
+    - Risk status (trading allowed, daily P&L, trades remaining)
+  - Added `_format_telegram_daily_report()` helper function for Telegram formatting
+  - Beautiful emoji-rich formatting with sections and status indicators
+- Created `n8n-workflows/daily-report.json`:
+  - Schedule trigger: 22:00 UTC Monday-Friday (cron: "0 22 * * 1-5")
+  - Trading day check with holiday exclusion (New Year, Christmas)
+  - Conditional logic: sends full report if trades executed, simpler report if no trades
+  - Uses Telegram Markdown formatting with parse_mode
+
+**Patterns Discovered:**
+- n8n cron expressions: "0 22 * * 1-5" = at minute 0, hour 22, any day, any month, Mon-Fri
+- Telegram Markdown uses ** for bold, _ for italic
+- Use conditional emojis based on P&L status (📈 profitable, 📉 loss, ➖ breakeven)
+- f-string format specifiers: {:+.2f} for signed 2 decimal, {:,.2f} for thousands separator
+
+**Notes:**
+- Report scheduled for 22:00 UTC (after most trading ends)
+- If no trades today, sends simplified report with all-time stats only
+- Major holidays (01-01, 12-25, 12-26) are skipped
+- Telegram chatId: 6074722648 (same as other workflows)
+- API uses format=telegram query param to get pre-formatted message
+

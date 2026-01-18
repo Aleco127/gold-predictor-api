@@ -3062,6 +3062,221 @@ async def get_performance_tracker_status(api_key: str = Depends(verify_api_key))
     return status_data
 
 
+# ==================== Daily Report Endpoints ====================
+
+
+@app.get("/api/daily-report")
+async def get_daily_report(
+    format: str = "json",
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Generate daily trading performance report.
+
+    Returns a comprehensive report with:
+    - Today's trades summary
+    - Win rate and P&L
+    - Best and worst trade
+    - Equity change and drawdown
+    - Comparison with previous periods
+
+    Args:
+        format: "json" for raw data, "telegram" for pre-formatted message
+    """
+    global trading_performance_tracker, trade_db, risk_manager
+
+    if trading_performance_tracker is None or trade_db is None:
+        return {
+            "configured": False,
+            "message": "Performance tracker or trade database not initialized",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    try:
+        from datetime import timezone, timedelta
+
+        # Get today's date range (UTC)
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = now
+
+        # Get today's trades
+        today_filter = TradeFilter(
+            start_date=today_start,
+            end_date=today_end,
+            limit=1000,
+        )
+        today_trades = trade_db.get_trades(today_filter)
+        closed_today = [t for t in today_trades if t.get("pnl") is not None]
+
+        # Calculate today's stats
+        total_trades_today = len(closed_today)
+        winning_trades = [t for t in closed_today if t.get("outcome") == "WIN"]
+        losing_trades = [t for t in closed_today if t.get("outcome") == "LOSS"]
+
+        win_count = len(winning_trades)
+        loss_count = len(losing_trades)
+        win_rate_today = (win_count / total_trades_today * 100) if total_trades_today > 0 else 0
+
+        # P&L calculations
+        pnl_list = [t.get("pnl", 0) for t in closed_today]
+        total_pnl_today = sum(pnl_list)
+
+        # Best and worst trades
+        best_trade = max(closed_today, key=lambda t: t.get("pnl", 0)) if closed_today else None
+        worst_trade = min(closed_today, key=lambda t: t.get("pnl", 0)) if closed_today else None
+
+        best_pnl = best_trade.get("pnl", 0) if best_trade else 0
+        worst_pnl = worst_trade.get("pnl", 0) if worst_trade else 0
+
+        # Get performance metrics for different periods
+        today_metrics = trading_performance_tracker.get_performance(period="all")  # All time for context
+
+        # Get drawdown
+        drawdown_info = trading_performance_tracker.get_drawdown()
+
+        # Get daily stats from risk manager if available
+        daily_stats = None
+        if risk_manager:
+            daily_stats = risk_manager.get_daily_stats()
+
+        # Calculate equity change
+        initial_balance = trading_performance_tracker.initial_balance
+        current_equity = initial_balance + today_metrics.total_pnl
+
+        # Build report data
+        report = {
+            "report_date": now.strftime("%Y-%m-%d"),
+            "report_time_utc": now.strftime("%H:%M:%S"),
+            "generated_at": now.isoformat(),
+
+            # Today's summary
+            "today": {
+                "trades_count": total_trades_today,
+                "winning_trades": win_count,
+                "losing_trades": loss_count,
+                "win_rate": round(win_rate_today, 2),
+                "total_pnl": round(total_pnl_today, 2),
+                "best_trade_pnl": round(best_pnl, 2),
+                "worst_trade_pnl": round(worst_pnl, 2),
+                "best_trade_id": best_trade.get("deal_id") if best_trade else None,
+                "worst_trade_id": worst_trade.get("deal_id") if worst_trade else None,
+            },
+
+            # All-time metrics
+            "all_time": {
+                "total_trades": today_metrics.total_trades,
+                "win_rate": round(today_metrics.win_rate * 100, 2),
+                "total_pnl": round(today_metrics.total_pnl, 2),
+                "profit_factor": round(today_metrics.profit_factor, 4),
+                "sharpe_ratio": round(today_metrics.sharpe_ratio, 4),
+                "expectancy": round(today_metrics.expectancy, 2),
+            },
+
+            # Equity and drawdown
+            "equity": {
+                "initial_balance": round(initial_balance, 2),
+                "current_equity": round(current_equity, 2),
+                "equity_change": round(today_metrics.total_pnl, 2),
+                "equity_change_pct": round((today_metrics.total_pnl / initial_balance) * 100, 2) if initial_balance > 0 else 0,
+            },
+
+            "drawdown": {
+                "max_drawdown_pct": round(drawdown_info.max_drawdown * 100, 2),
+                "max_drawdown_amount": round(drawdown_info.max_drawdown_amount, 2),
+                "current_drawdown_pct": round(drawdown_info.current_drawdown * 100, 2),
+            },
+
+            # Risk status
+            "risk_status": {
+                "trading_allowed": daily_stats.trading_allowed if daily_stats else True,
+                "daily_pnl": round(daily_stats.total_pnl, 2) if daily_stats else round(total_pnl_today, 2),
+                "trades_remaining": (
+                    (risk_manager.max_daily_trades - daily_stats.trade_count)
+                    if daily_stats and risk_manager else None
+                ),
+            },
+        }
+
+        # If telegram format requested, return pre-formatted message
+        if format.lower() == "telegram":
+            report["telegram_message"] = _format_telegram_daily_report(report)
+
+        return report
+
+    except Exception as e:
+        logger.error(f"Error generating daily report: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate daily report: {str(e)}",
+        )
+
+
+def _format_telegram_daily_report(report: dict) -> str:
+    """Format daily report for Telegram with emojis."""
+    today = report["today"]
+    all_time = report["all_time"]
+    equity = report["equity"]
+    drawdown = report["drawdown"]
+    risk = report["risk_status"]
+
+    # Determine overall sentiment
+    if today["total_pnl"] > 0:
+        header_emoji = "📈"
+        pnl_emoji = "💰"
+        status_text = "PROFITABLE DAY"
+    elif today["total_pnl"] < 0:
+        header_emoji = "📉"
+        pnl_emoji = "💸"
+        status_text = "LOSING DAY"
+    else:
+        header_emoji = "➖"
+        pnl_emoji = "💵"
+        status_text = "BREAK EVEN"
+
+    # Format the message
+    message = f"""{header_emoji} **GOLD DAILY REPORT** {header_emoji}
+📅 {report['report_date']}
+
+━━━━━━━━━━━━━━━━━━━━
+📊 **TODAY'S SUMMARY**
+━━━━━━━━━━━━━━━━━━━━
+{pnl_emoji} Status: {status_text}
+📈 Trades: {today['trades_count']} ({today['winning_trades']}W / {today['losing_trades']}L)
+🎯 Win Rate: {today['win_rate']}%
+💵 P&L: ${today['total_pnl']:+.2f}
+
+🏆 Best Trade: ${today['best_trade_pnl']:+.2f}
+😔 Worst Trade: ${today['worst_trade_pnl']:+.2f}
+
+━━━━━━━━━━━━━━━━━━━━
+💼 **ACCOUNT STATUS**
+━━━━━━━━━━━━━━━━━━━━
+💰 Equity: ${equity['current_equity']:,.2f}
+📊 Change: ${equity['equity_change']:+.2f} ({equity['equity_change_pct']:+.2f}%)
+📉 Max Drawdown: {drawdown['max_drawdown_pct']:.2f}%
+📉 Current DD: {drawdown['current_drawdown_pct']:.2f}%
+
+━━━━━━━━━━━━━━━━━━━━
+📈 **ALL-TIME STATS**
+━━━━━━━━━━━━━━━━━━━━
+🔢 Total Trades: {all_time['total_trades']}
+🎯 Win Rate: {all_time['win_rate']}%
+📊 Profit Factor: {all_time['profit_factor']:.2f}
+📏 Sharpe Ratio: {all_time['sharpe_ratio']:.2f}
+💎 Expectancy: ${all_time['expectancy']:.2f}/trade
+
+━━━━━━━━━━━━━━━━━━━━
+⚠️ **RISK STATUS**
+━━━━━━━━━━━━━━━━━━━━
+{'✅ Trading Allowed' if risk['trading_allowed'] else '🛑 Trading Blocked'}
+
+🤖 _Gold Predictor Bot_
+⏰ {report['report_time_utc']} UTC"""
+
+    return message
+
+
 # Main entry point
 if __name__ == "__main__":
     import uvicorn
