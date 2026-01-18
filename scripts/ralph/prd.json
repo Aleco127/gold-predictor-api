@@ -40,8 +40,8 @@
       ],
       "files": ["src/trading/risk_manager.py", "src/api/server.py"],
       "dependencies": ["US-009"],
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented volatility-adjusted sizing using ATR ratio with configurable thresholds"
     },
     {
       "id": "US-007",

@@ -23,7 +23,7 @@ from ..data.capital_connector import CapitalConnector
 from ..features.technical_indicators import TechnicalIndicators
 from ..models.ensemble import EnsemblePredictor, Signal
 from ..preprocessing.data_processor import DataProcessor
-from ..trading import RiskManager, DailyStats
+from ..trading import RiskManager, DailyStats, PositionSizeResult
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -147,6 +147,28 @@ class RiskStatusResponse(BaseModel):
     blocked_at: Optional[str] = None
 
 
+class PositionSizeResponse(BaseModel):
+    """Response model for position size calculation."""
+    adjusted_size: float
+    base_size: float
+    adjustment_factor: float
+    volatility_regime: str
+    current_atr: float
+    average_atr: float
+    atr_ratio: float
+    reason: str
+
+
+class PositionSizingConfigResponse(BaseModel):
+    """Response model for position sizing configuration."""
+    base_position_size: float
+    max_position_size: float
+    min_position_size: float
+    volatility_high_threshold: float
+    volatility_low_threshold: float
+    volatility_lookback: int
+
+
 # API Key security
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -248,13 +270,19 @@ async def lifespan(app: FastAPI):
                 confidence_threshold=settings.confidence_threshold,
             )
 
-        # Initialize risk manager
+        # Initialize risk manager with position sizing
         risk_manager = RiskManager(
             daily_loss_limit_pct=settings.daily_loss_limit_pct,
             account_balance=settings.default_account_balance,
             max_daily_trades=settings.max_daily_trades,
+            base_position_size=settings.base_position_size,
+            max_position_size=settings.max_position_size,
+            min_position_size=settings.min_position_size,
+            volatility_high_threshold=settings.volatility_high_threshold,
+            volatility_low_threshold=settings.volatility_low_threshold,
+            volatility_lookback=settings.volatility_lookback,
         )
-        logger.info("Risk manager initialized")
+        logger.info("Risk manager initialized with position sizing")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -624,6 +652,7 @@ async def execute_trade(
 async def predict_and_trade(
     size: float = 0.01,
     min_confidence: float = 0.6,
+    use_volatility_sizing: bool = True,
     api_key: str = Depends(verify_api_key),
 ):
     """
@@ -634,7 +663,10 @@ async def predict_and_trade(
     - Confidence >= min_confidence
     - Risk manager allows trading (daily loss limit not reached)
 
-    Returns both prediction and trade result.
+    When use_volatility_sizing is True, position size is adjusted based on
+    current ATR vs average ATR (higher volatility = smaller position).
+
+    Returns both prediction and trade result with position sizing info.
     """
     global predictor, data_processor, data_connector, indicator_calculator, risk_manager
 
@@ -669,6 +701,19 @@ async def predict_and_trade(
             target_scaler=data_processor.target_scaler,
         )
 
+        # Calculate volatility-adjusted position size if enabled
+        position_sizing_info = None
+        trade_size = size
+
+        if use_volatility_sizing and risk_manager and "atr" in df.columns:
+            atr_values = df["atr"].dropna().tolist()
+            position_result = risk_manager.calculate_position_size(
+                atr_values=atr_values,
+                base_size=size,
+            )
+            trade_size = position_result.adjusted_size
+            position_sizing_info = position_result.to_dict()
+
         result = {
             "prediction": {
                 "signal": prediction.signal.value,
@@ -683,6 +728,7 @@ async def predict_and_trade(
                 "trading_allowed": can_trade,
                 "blocked_reason": blocked_reason,
             },
+            "position_sizing": position_sizing_info,
         }
 
         # Check if we should trade
@@ -699,7 +745,7 @@ async def predict_and_trade(
                 signal=signal,
                 confidence=prediction.confidence,
                 current_price=prediction.current_price,
-                size=size,
+                size=trade_size,  # Use volatility-adjusted size
             )
 
             result["trade"] = trade_result
@@ -708,7 +754,7 @@ async def predict_and_trade(
             # Record P&L from trade if available (for closed positions from P&L tracking)
             # Note: For open positions, P&L will be recorded when position is closed
             if trade_result.get("success") and risk_manager:
-                logger.info(f"Trade executed, will track P&L on close")
+                logger.info(f"Trade executed with size {trade_size}, will track P&L on close")
 
         elif signal_allows_trade and not can_trade:
             result["trade"] = {"error": f"Trading blocked: {blocked_reason}"}
@@ -950,6 +996,77 @@ async def update_account_balance(
         "new_daily_limit": risk_manager.daily_loss_limit,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+@app.get("/api/position-sizing-config", response_model=PositionSizingConfigResponse)
+async def get_position_sizing_config(api_key: str = Depends(verify_api_key)):
+    """
+    Get current position sizing configuration.
+
+    Returns volatility thresholds and size limits used for position calculations.
+    """
+    global risk_manager
+
+    if risk_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Risk manager not initialized",
+        )
+
+    config = risk_manager.get_position_sizing_config()
+    return PositionSizingConfigResponse(**config)
+
+
+@app.post("/api/calculate-position-size", response_model=PositionSizeResponse)
+async def calculate_position_size(
+    base_size: float = 0.01,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Calculate volatility-adjusted position size based on current market conditions.
+
+    Fetches live ATR data and calculates the optimal position size.
+    Returns adjusted size and volatility regime information.
+    """
+    global risk_manager, data_connector, indicator_calculator
+
+    if risk_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Risk manager not initialized",
+        )
+
+    if data_connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Data connector not initialized",
+        )
+
+    try:
+        # Get recent data with ATR
+        df = data_connector.get_ohlcv(bars=100)
+        df = indicator_calculator.calculate_all(df)
+
+        if "atr" not in df.columns:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="ATR not calculated in data",
+            )
+
+        atr_values = df["atr"].dropna().tolist()
+        result = risk_manager.calculate_position_size(
+            atr_values=atr_values,
+            base_size=base_size,
+        )
+
+        return PositionSizeResponse(**result.to_dict())
+
+    except Exception as e:
+        logger.error(f"Position size calculation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Calculation failed: {str(e)}",
+        )
 
 
 # Main entry point

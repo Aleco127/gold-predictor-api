@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     max_daily_trades: int = 50  # Max trades per day
     default_account_balance: float = 10000.0  # Default for risk calculations
 
+    # Position Sizing
+    base_position_size: float = 0.01  # Base position size in lots
+    max_position_size: float = 0.1  # Maximum position size in lots
+    min_position_size: float = 0.01  # Minimum position size in lots
+    volatility_high_threshold: float = 1.5  # ATR multiplier for high volatility (reduce size)
+    volatility_low_threshold: float = 0.7  # ATR multiplier for low volatility (increase size)
+    volatility_lookback: int = 20  # Periods for average ATR calculation
+
     # Feature Configuration
     rsi_period: int = 14
     macd_fast: int = 12

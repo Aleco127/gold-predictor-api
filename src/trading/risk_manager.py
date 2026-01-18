@@ -6,7 +6,8 @@ Handles daily loss limits, position sizing, and risk controls.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
+import numpy as np
 from loguru import logger
 
 
@@ -59,13 +60,40 @@ class DailyStats:
         }
 
 
+@dataclass
+class PositionSizeResult:
+    """Result of position size calculation."""
+    adjusted_size: float
+    base_size: float
+    adjustment_factor: float
+    volatility_regime: str  # "low", "normal", "high"
+    current_atr: float
+    average_atr: float
+    atr_ratio: float
+    reason: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API response."""
+        return {
+            "adjusted_size": round(self.adjusted_size, 4),
+            "base_size": round(self.base_size, 4),
+            "adjustment_factor": round(self.adjustment_factor, 4),
+            "volatility_regime": self.volatility_regime,
+            "current_atr": round(self.current_atr, 4),
+            "average_atr": round(self.average_atr, 4),
+            "atr_ratio": round(self.atr_ratio, 4),
+            "reason": self.reason,
+        }
+
+
 class RiskManager:
     """
-    Manages trading risk including daily loss limits.
+    Manages trading risk including daily loss limits and position sizing.
 
     Features:
     - Daily P&L tracking
     - Daily loss limit protection
+    - Volatility-adjusted position sizing
     - Trade logging
     - Risk statistics
 
@@ -80,6 +108,9 @@ class RiskManager:
             # Execute trade
             pass
 
+        # Calculate position size based on volatility
+        position = risk_manager.calculate_position_size(atr_values)
+
         # Record closed trade
         risk_manager.record_trade(trade)
     """
@@ -89,6 +120,12 @@ class RiskManager:
         daily_loss_limit_pct: float = 3.0,
         account_balance: float = 10000.0,
         max_daily_trades: int = 50,
+        base_position_size: float = 0.01,
+        max_position_size: float = 0.1,
+        min_position_size: float = 0.01,
+        volatility_high_threshold: float = 1.5,
+        volatility_low_threshold: float = 0.7,
+        volatility_lookback: int = 20,
     ):
         """
         Initialize risk manager.
@@ -97,10 +134,24 @@ class RiskManager:
             daily_loss_limit_pct: Maximum daily loss as percentage of account (default 3%)
             account_balance: Account balance for calculating loss limit
             max_daily_trades: Maximum number of trades per day
+            base_position_size: Base position size in lots (default 0.01)
+            max_position_size: Maximum position size in lots (default 0.1)
+            min_position_size: Minimum position size in lots (default 0.01)
+            volatility_high_threshold: ATR multiplier for high volatility (default 1.5)
+            volatility_low_threshold: ATR multiplier for low volatility (default 0.7)
+            volatility_lookback: Periods for average ATR calculation (default 20)
         """
         self.daily_loss_limit_pct = daily_loss_limit_pct
         self.account_balance = account_balance
         self.max_daily_trades = max_daily_trades
+
+        # Position sizing parameters
+        self.base_position_size = base_position_size
+        self.max_position_size = max_position_size
+        self.min_position_size = min_position_size
+        self.volatility_high_threshold = volatility_high_threshold
+        self.volatility_low_threshold = volatility_low_threshold
+        self.volatility_lookback = volatility_lookback
 
         # Daily tracking
         self._current_date: str = self._get_utc_date()
@@ -112,7 +163,8 @@ class RiskManager:
         logger.info(
             f"RiskManager initialized: "
             f"daily_loss_limit={daily_loss_limit_pct}%, "
-            f"balance=${account_balance:,.2f}"
+            f"balance=${account_balance:,.2f}, "
+            f"base_size={base_position_size} lots"
         )
 
     @staticmethod
@@ -310,4 +362,118 @@ class RiskManager:
             "trading_allowed": can_trade,
             "blocked_reason": reason,
             "blocked_at": self._blocked_at,
+        }
+
+    def calculate_position_size(
+        self,
+        atr_values: List[float],
+        base_size: Optional[float] = None,
+    ) -> PositionSizeResult:
+        """
+        Calculate volatility-adjusted position size.
+
+        Uses the relationship between current ATR and average ATR to adjust
+        position size. Higher volatility = smaller position, lower volatility
+        = larger position.
+
+        Args:
+            atr_values: List of ATR values (at least volatility_lookback + 1 values)
+            base_size: Override base position size (optional)
+
+        Returns:
+            PositionSizeResult with adjusted size and details
+        """
+        base = base_size if base_size is not None else self.base_position_size
+
+        # Need at least lookback + 1 values
+        if len(atr_values) < self.volatility_lookback + 1:
+            logger.warning(
+                f"Not enough ATR values ({len(atr_values)}) for volatility calculation. "
+                f"Need at least {self.volatility_lookback + 1}. Using base size."
+            )
+            return PositionSizeResult(
+                adjusted_size=base,
+                base_size=base,
+                adjustment_factor=1.0,
+                volatility_regime="unknown",
+                current_atr=atr_values[-1] if atr_values else 0.0,
+                average_atr=0.0,
+                atr_ratio=1.0,
+                reason="Insufficient ATR data for volatility calculation",
+            )
+
+        # Get current ATR and average ATR
+        current_atr = atr_values[-1]
+        avg_atr = np.mean(atr_values[-self.volatility_lookback - 1:-1])
+
+        # Calculate ATR ratio
+        if avg_atr == 0:
+            atr_ratio = 1.0
+        else:
+            atr_ratio = current_atr / avg_atr
+
+        # Determine volatility regime and adjustment factor
+        if atr_ratio > self.volatility_high_threshold:
+            # High volatility - reduce position size
+            volatility_regime = "high"
+            # Scale down: at 1.5x use 0.67, at 2x use 0.5, etc.
+            adjustment_factor = 1.0 / atr_ratio
+            reason = f"High volatility (ATR {atr_ratio:.2f}x avg) - reducing position"
+        elif atr_ratio < self.volatility_low_threshold:
+            # Low volatility - increase position size
+            volatility_regime = "low"
+            # Scale up: at 0.7x use 1.43, at 0.5x use 2.0, etc.
+            # But cap the increase to prevent oversizing
+            adjustment_factor = min(1.0 / atr_ratio, 2.0)
+            reason = f"Low volatility (ATR {atr_ratio:.2f}x avg) - increasing position"
+        else:
+            # Normal volatility - use base size
+            volatility_regime = "normal"
+            adjustment_factor = 1.0
+            reason = f"Normal volatility (ATR {atr_ratio:.2f}x avg) - using base size"
+
+        # Calculate adjusted size
+        adjusted_size = base * adjustment_factor
+
+        # Apply limits
+        if adjusted_size > self.max_position_size:
+            adjusted_size = self.max_position_size
+            reason += f" (capped at max {self.max_position_size})"
+        elif adjusted_size < self.min_position_size:
+            adjusted_size = self.min_position_size
+            reason += f" (floored at min {self.min_position_size})"
+
+        # Round to 2 decimal places (standard lot sizing)
+        adjusted_size = round(adjusted_size, 2)
+
+        logger.info(
+            f"Position size calculated: {base} -> {adjusted_size} lots "
+            f"({volatility_regime} volatility, ATR ratio: {atr_ratio:.2f})"
+        )
+
+        return PositionSizeResult(
+            adjusted_size=adjusted_size,
+            base_size=base,
+            adjustment_factor=adjustment_factor,
+            volatility_regime=volatility_regime,
+            current_atr=current_atr,
+            average_atr=avg_atr,
+            atr_ratio=atr_ratio,
+            reason=reason,
+        )
+
+    def get_position_sizing_config(self) -> Dict[str, Any]:
+        """
+        Get current position sizing configuration.
+
+        Returns:
+            Dictionary with position sizing parameters
+        """
+        return {
+            "base_position_size": self.base_position_size,
+            "max_position_size": self.max_position_size,
+            "min_position_size": self.min_position_size,
+            "volatility_high_threshold": self.volatility_high_threshold,
+            "volatility_low_threshold": self.volatility_low_threshold,
+            "volatility_lookback": self.volatility_lookback,
         }
