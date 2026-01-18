@@ -30,7 +30,7 @@ from ..trading import (
     PositionManager,
     TrailingStopUpdate,
 )
-from ..data.economic_calendar import EconomicCalendar, ImpactLevel
+from ..data.economic_calendar import EconomicCalendar, ImpactLevel, NewsFilter, NewsFilterResult
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -40,6 +40,7 @@ indicator_calculator: Optional[TechnicalIndicators] = None
 risk_manager: Optional[RiskManager] = None
 position_manager: Optional[PositionManager] = None
 economic_calendar: Optional[EconomicCalendar] = None
+news_filter: Optional[NewsFilter] = None
 
 
 class PredictionRequest(BaseModel):
@@ -295,7 +296,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, position_manager, economic_calendar, news_filter
 
     logger.info("Starting Gold Predictor API...")
 
@@ -393,6 +394,14 @@ async def lifespan(app: FastAPI):
         # Fetch initial events
         await economic_calendar.fetch_events()
         logger.info("Economic calendar initialized")
+
+        # Initialize news filter for trading pause
+        news_filter = NewsFilter(
+            calendar=economic_calendar,
+            pause_minutes_before=30,
+            pause_minutes_after=30,
+        )
+        logger.info("News filter initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -778,7 +787,7 @@ async def predict_and_trade(
 
     Returns both prediction and trade result with position sizing info.
     """
-    global predictor, data_processor, data_connector, indicator_calculator, risk_manager
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager, news_filter
 
     if predictor is None or predictor.lstm_model is None:
         raise HTTPException(
@@ -795,6 +804,10 @@ async def predict_and_trade(
     try:
         # Check if trading is allowed by risk manager
         can_trade, blocked_reason = risk_manager.can_trade() if risk_manager else (True, None)
+
+        # Check if trading is paused due to high-impact news
+        news_check = news_filter.check_trading_allowed() if news_filter else NewsFilterResult(trading_allowed=True, is_paused=False)
+        news_paused = news_check.is_paused
 
         # Get prediction first
         df = data_connector.get_ohlcv(
@@ -838,6 +851,8 @@ async def predict_and_trade(
                 "trading_allowed": can_trade,
                 "blocked_reason": blocked_reason,
             },
+            "news_paused": news_paused,
+            "news_filter": news_check.to_dict() if news_paused else None,
             "position_sizing": position_sizing_info,
         }
 
@@ -847,8 +862,8 @@ async def predict_and_trade(
             "BUY" in signal.upper() or "SELL" in signal.upper()
         ) and prediction.confidence >= min_confidence
 
-        # Only trade if both signal and risk manager allow
-        should_trade = signal_allows_trade and can_trade
+        # Only trade if signal, risk manager, and news filter all allow
+        should_trade = signal_allows_trade and can_trade and not news_paused
 
         if should_trade:
             trade_result = data_connector.execute_trade_from_signal(
@@ -869,6 +884,10 @@ async def predict_and_trade(
         elif signal_allows_trade and not can_trade:
             result["trade"] = {"error": f"Trading blocked: {blocked_reason}"}
             logger.warning(f"Trade blocked by risk manager: {blocked_reason}")
+
+        elif signal_allows_trade and news_paused:
+            result["trade"] = {"error": f"Trading paused: {news_check.reason}"}
+            logger.warning(f"Trade blocked by news filter: {news_check.reason}")
 
         return result
 
@@ -2006,6 +2025,76 @@ async def refresh_calendar(api_key: str = Depends(verify_api_key)):
     return {
         "refreshed": True,
         "events_fetched": len(events),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+# ============================================================================
+# News Filter Endpoints
+# ============================================================================
+
+
+@app.get("/api/news-filter/status")
+async def get_news_filter_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get news filter status.
+
+    Returns whether trading is currently paused due to high-impact events,
+    the reason for pause, and the next upcoming high-impact event.
+    """
+    global news_filter
+
+    if news_filter is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="News filter not initialized",
+        )
+
+    status_data = news_filter.get_status()
+    status_data["timestamp"] = datetime.now().isoformat()
+    return status_data
+
+
+@app.get("/api/news-filter/check")
+async def check_news_filter(api_key: str = Depends(verify_api_key)):
+    """
+    Check if trading is allowed by news filter.
+
+    Quick endpoint to check if trading should be paused.
+    Returns trading_allowed boolean and details if paused.
+    """
+    global news_filter
+
+    if news_filter is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="News filter not initialized",
+        )
+
+    result = news_filter.check_trading_allowed()
+    return {
+        **result.to_dict(),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/news-filter/config")
+async def get_news_filter_config(api_key: str = Depends(verify_api_key)):
+    """
+    Get news filter configuration.
+
+    Returns pause windows (minutes before and after high-impact events).
+    """
+    global news_filter
+
+    if news_filter is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="News filter not initialized",
+        )
+
+    return {
+        **news_filter.get_config(),
         "timestamp": datetime.now().isoformat(),
     }
 

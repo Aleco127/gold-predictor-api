@@ -189,3 +189,40 @@ Branch: ralph/gold-predictor-v2
 - HIGH_IMPACT_KEYWORDS list boosts events even if not marked high
 - is_near_high_impact_event() used for trading pause (US-002)
 
+### Iteration 6 - US-002: Trading Pause During High-Impact Events
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Updated `src/data/economic_calendar.py`:
+  - Added NewsFilterResult dataclass with to_dict() serialization
+  - Added NewsFilter class with configurable pause windows
+  - Methods: check_trading_allowed, get_next_high_impact_event, get_config, get_status
+- Updated `src/api/server.py`:
+  - Added NewsFilter import and global instance
+  - Initialize NewsFilter in lifespan (30 min before/after)
+  - Updated /predict-and-trade endpoint:
+    - Check news_filter before trading
+    - Added news_paused and news_filter fields to response
+    - Block trade if news_paused is true
+    - Log when trade blocked by news filter
+  - Added news filter endpoints:
+    - `/api/news-filter/status` - Get full status with next event
+    - `/api/news-filter/check` - Quick check if trading allowed
+    - `/api/news-filter/config` - Get pause window configuration
+- Updated `n8n-workflows/gold-prediction-trade.json`:
+  - Added "News Paused?" IF check after "Trade Executed?"
+  - Added "News Paused Alert" Telegram message
+  - Updated connections to route through news pause check
+
+**Patterns Discovered:**
+- NewsFilter wraps EconomicCalendar for pause logic
+- Pause window: minutes before event + minutes after event
+- time_diff > 0 = event in future, < 0 = event in past
+- n8n uses optional chaining (?.) for null-safe access
+
+**Notes:**
+- Default pause: 30 min before, 30 min after high-impact events
+- Only HIGH impact level events trigger trading pause
+- news_filter field only included in response when paused (saves bandwidth)
+- n8n workflow shows event details in Telegram when paused
+

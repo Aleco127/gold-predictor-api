@@ -516,6 +516,145 @@ class EconomicCalendar:
         }
 
 
+@dataclass
+class NewsFilterResult:
+    """Result of news filter check."""
+    trading_allowed: bool
+    is_paused: bool
+    reason: Optional[str] = None
+    near_event: Optional[EconomicEvent] = None
+    minutes_until_event: Optional[float] = None
+    minutes_since_event: Optional[float] = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "trading_allowed": self.trading_allowed,
+            "is_paused": self.is_paused,
+            "reason": self.reason,
+            "near_event": self.near_event.to_dict() if self.near_event else None,
+            "minutes_until_event": self.minutes_until_event,
+            "minutes_since_event": self.minutes_since_event,
+        }
+
+
+class NewsFilter:
+    """
+    News filter for pausing trading around high-impact events.
+
+    Checks if trading should be paused based on proximity to
+    high-impact economic events.
+    """
+
+    def __init__(
+        self,
+        calendar: EconomicCalendar,
+        pause_minutes_before: int = 30,
+        pause_minutes_after: int = 30,
+    ):
+        """
+        Initialize news filter.
+
+        Args:
+            calendar: EconomicCalendar instance to check events
+            pause_minutes_before: Minutes to pause before high-impact events
+            pause_minutes_after: Minutes to pause after high-impact events
+        """
+        self.calendar = calendar
+        self.pause_before = pause_minutes_before
+        self.pause_after = pause_minutes_after
+
+        logger.info(
+            f"NewsFilter initialized: pause {pause_minutes_before}min before, "
+            f"{pause_minutes_after}min after high-impact events"
+        )
+
+    def check_trading_allowed(self) -> NewsFilterResult:
+        """
+        Check if trading is allowed based on economic calendar.
+
+        Returns:
+            NewsFilterResult with trading status and event details
+        """
+        now = datetime.now(timezone.utc)
+
+        # Check for nearby high-impact events
+        for event in self.calendar._events:
+            if event.impact != ImpactLevel.HIGH:
+                continue
+
+            event_time = event.datetime_utc
+            time_diff = (event_time - now).total_seconds() / 60  # minutes
+
+            # Event is in the future
+            if 0 < time_diff <= self.pause_before:
+                return NewsFilterResult(
+                    trading_allowed=False,
+                    is_paused=True,
+                    reason=f"High-impact event '{event.event_name}' in {time_diff:.0f} minutes",
+                    near_event=event,
+                    minutes_until_event=time_diff,
+                )
+
+            # Event just happened
+            if -self.pause_after <= time_diff <= 0:
+                minutes_ago = abs(time_diff)
+                return NewsFilterResult(
+                    trading_allowed=False,
+                    is_paused=True,
+                    reason=f"High-impact event '{event.event_name}' occurred {minutes_ago:.0f} minutes ago",
+                    near_event=event,
+                    minutes_since_event=minutes_ago,
+                )
+
+        # No blocking events
+        return NewsFilterResult(
+            trading_allowed=True,
+            is_paused=False,
+            reason=None,
+        )
+
+    def get_next_high_impact_event(self) -> Optional[EconomicEvent]:
+        """
+        Get the next upcoming high-impact event.
+
+        Returns:
+            Next high-impact event or None
+        """
+        now = datetime.now(timezone.utc)
+
+        upcoming = [
+            event for event in self.calendar._events
+            if event.impact == ImpactLevel.HIGH and event.datetime_utc > now
+        ]
+
+        if upcoming:
+            return min(upcoming, key=lambda e: e.datetime_utc)
+        return None
+
+    def get_config(self) -> dict:
+        """Get filter configuration."""
+        return {
+            "pause_minutes_before": self.pause_before,
+            "pause_minutes_after": self.pause_after,
+            "total_pause_window_minutes": self.pause_before + self.pause_after,
+        }
+
+    def get_status(self) -> dict:
+        """Get filter status including current state and next event."""
+        result = self.check_trading_allowed()
+        next_event = self.get_next_high_impact_event()
+
+        return {
+            "trading_allowed": result.trading_allowed,
+            "is_paused": result.is_paused,
+            "pause_reason": result.reason,
+            "current_event": result.near_event.to_dict() if result.near_event else None,
+            "next_high_impact_event": next_event.to_dict() if next_event else None,
+            "config": self.get_config(),
+        }
+
+
 # Convenience function for synchronous use
 def fetch_events_sync() -> list[EconomicEvent]:
     """Synchronous wrapper for fetching events."""

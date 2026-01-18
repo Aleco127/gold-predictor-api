@@ -205,6 +205,55 @@
           },
           "conditions": [
             {
+              "id": "check-news-paused",
+              "leftValue": "={{$json.news_paused}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "news-paused-check",
+      "name": "News Paused?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "6074722648",
+        "text": "=\ud83d\udcf0 **GOLD TRADE PAUSED** \ud83d\udcf0\n\n\u23f8\ufe0f Trading paused due to high-impact news event\n\n**Event Details:**\n\ud83d\udcc5 {{$json.news_filter?.near_event?.event_name || 'Economic Event'}}\n\ud83d\udcb5 Currency: {{$json.news_filter?.near_event?.currency || 'USD'}}\n\u23f0 Event Time: {{$json.news_filter?.near_event?.datetime_utc || 'N/A'}}\n\n**Signal Would Have Been:**\n\ud83d\udcca Signal: {{$json.prediction.signal}}\n\ud83d\udcca Confidence: {{Math.round($json.prediction.confidence * 100)}}%\n\ud83d\udcb5 Price: ${{$json.prediction.current_price.toFixed(2)}}\n\n\u26a0\ufe0f Reason: {{$json.news_filter?.reason || 'Near high-impact event'}}\n\n\u23f0 {{new Date().toLocaleString()}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-news-paused-alert",
+      "name": "News Paused Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [60, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TradingBotCred01",
+          "name": "Telegram Trading Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
               "id": "check-strong-signal",
               "leftValue": "={{$json.prediction.signal}}",
               "rightValue": "STRONG",
@@ -222,7 +271,7 @@
       "name": "Strong Signal?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [-200, 300]
+      "position": [-200, 450]
     },
     {
       "parameters": {
@@ -360,6 +409,24 @@
         [
           {
             "node": "Trade Success?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "News Paused?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Paused?": {
+      "main": [
+        [
+          {
+            "node": "News Paused Alert",
             "type": "main",
             "index": 0
           }
