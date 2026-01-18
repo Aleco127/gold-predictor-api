@@ -23,12 +23,14 @@ from ..data.capital_connector import CapitalConnector
 from ..features.technical_indicators import TechnicalIndicators
 from ..models.ensemble import EnsemblePredictor, Signal
 from ..preprocessing.data_processor import DataProcessor
+from ..trading import RiskManager, DailyStats
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
 data_processor: Optional[DataProcessor] = None
 data_connector = None  # Either MT5Connector or CapitalConnector
 indicator_calculator: Optional[TechnicalIndicators] = None
+risk_manager: Optional[RiskManager] = None
 
 
 class PredictionRequest(BaseModel):
@@ -116,6 +118,35 @@ class AccountResponse(BaseModel):
     timestamp: str
 
 
+class DailyStatsResponse(BaseModel):
+    """Response model for daily risk stats."""
+    date: str
+    total_pnl: float
+    trade_count: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: float
+    largest_win: float
+    largest_loss: float
+    trading_allowed: bool
+    limit_reached_at: Optional[str] = None
+
+
+class RiskStatusResponse(BaseModel):
+    """Response model for full risk status."""
+    date: str
+    account_balance: float
+    daily_loss_limit_pct: float
+    daily_loss_limit_amount: float
+    current_daily_pnl: float
+    remaining_risk: float
+    trades_today: int
+    max_daily_trades: int
+    trading_allowed: bool
+    blocked_reason: Optional[str] = None
+    blocked_at: Optional[str] = None
+
+
 # API Key security
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -150,7 +181,7 @@ def get_predictor() -> EnsemblePredictor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global predictor, data_processor, data_connector, indicator_calculator
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager
 
     logger.info("Starting Gold Predictor API...")
 
@@ -216,6 +247,14 @@ async def lifespan(app: FastAPI):
                 xgb_weight=settings.xgb_weight,
                 confidence_threshold=settings.confidence_threshold,
             )
+
+        # Initialize risk manager
+        risk_manager = RiskManager(
+            daily_loss_limit_pct=settings.daily_loss_limit_pct,
+            account_balance=settings.default_account_balance,
+            max_daily_trades=settings.max_daily_trades,
+        )
+        logger.info("Risk manager initialized")
 
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -593,10 +632,11 @@ async def predict_and_trade(
     Only executes trade if:
     - Signal is BUY/SELL (not HOLD)
     - Confidence >= min_confidence
+    - Risk manager allows trading (daily loss limit not reached)
 
     Returns both prediction and trade result.
     """
-    global predictor, data_processor, data_connector, indicator_calculator
+    global predictor, data_processor, data_connector, indicator_calculator, risk_manager
 
     if predictor is None or predictor.lstm_model is None:
         raise HTTPException(
@@ -611,6 +651,9 @@ async def predict_and_trade(
         )
 
     try:
+        # Check if trading is allowed by risk manager
+        can_trade, blocked_reason = risk_manager.can_trade() if risk_manager else (True, None)
+
         # Get prediction first
         df = data_connector.get_ohlcv(
             bars=settings.model_lookback + 100,
@@ -636,13 +679,20 @@ async def predict_and_trade(
             },
             "trade": None,
             "trade_executed": False,
+            "risk_check": {
+                "trading_allowed": can_trade,
+                "blocked_reason": blocked_reason,
+            },
         }
 
         # Check if we should trade
         signal = prediction.signal.value
-        should_trade = (
+        signal_allows_trade = (
             "BUY" in signal.upper() or "SELL" in signal.upper()
         ) and prediction.confidence >= min_confidence
+
+        # Only trade if both signal and risk manager allow
+        should_trade = signal_allows_trade and can_trade
 
         if should_trade:
             trade_result = data_connector.execute_trade_from_signal(
@@ -654,6 +704,15 @@ async def predict_and_trade(
 
             result["trade"] = trade_result
             result["trade_executed"] = trade_result.get("success", False)
+
+            # Record P&L from trade if available (for closed positions from P&L tracking)
+            # Note: For open positions, P&L will be recorded when position is closed
+            if trade_result.get("success") and risk_manager:
+                logger.info(f"Trade executed, will track P&L on close")
+
+        elif signal_allows_trade and not can_trade:
+            result["trade"] = {"error": f"Trading blocked: {blocked_reason}"}
+            logger.warning(f"Trade blocked by risk manager: {blocked_reason}")
 
         return result
 
@@ -776,6 +835,121 @@ async def get_account(api_key: str = Depends(verify_api_key)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get account info: {str(e)}",
         )
+
+
+# ========================================
+# RISK MANAGEMENT ENDPOINTS
+# ========================================
+
+@app.get("/api/daily-stats", response_model=DailyStatsResponse)
+async def get_daily_stats(api_key: str = Depends(verify_api_key)):
+    """
+    Get daily trading statistics.
+
+    Returns P&L, trade counts, win rate, and whether trading is still allowed.
+    """
+    global risk_manager
+
+    if risk_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Risk manager not initialized",
+        )
+
+    stats = risk_manager.get_daily_stats()
+    return DailyStatsResponse(**stats.to_dict())
+
+
+@app.get("/api/risk-status", response_model=RiskStatusResponse)
+async def get_risk_status(api_key: str = Depends(verify_api_key)):
+    """
+    Get full risk manager status.
+
+    Returns account balance, daily limits, current P&L, remaining risk budget,
+    and whether trading is currently allowed.
+    """
+    global risk_manager
+
+    if risk_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Risk manager not initialized",
+        )
+
+    status_data = risk_manager.get_status()
+    return RiskStatusResponse(**status_data)
+
+
+@app.post("/api/record-pnl")
+async def record_pnl(
+    pnl: float,
+    direction: str = "UNKNOWN",
+    size: float = 0.01,
+    entry_price: float = 0.0,
+    exit_price: float = 0.0,
+    deal_id: Optional[str] = None,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Record P&L for a closed trade.
+
+    Call this endpoint when a trade closes to track P&L against daily limits.
+    """
+    global risk_manager
+
+    if risk_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Risk manager not initialized",
+        )
+
+    risk_manager.record_pnl(
+        pnl=pnl,
+        direction=direction,
+        size=size,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        deal_id=deal_id,
+    )
+
+    can_trade, reason = risk_manager.can_trade()
+
+    return {
+        "recorded": True,
+        "pnl": pnl,
+        "daily_total_pnl": risk_manager.get_daily_stats().total_pnl,
+        "trading_allowed": can_trade,
+        "blocked_reason": reason,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.put("/api/update-balance")
+async def update_account_balance(
+    balance: float,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Update account balance for risk calculations.
+
+    Call this to sync the risk manager with actual account balance.
+    """
+    global risk_manager
+
+    if risk_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Risk manager not initialized",
+        )
+
+    risk_manager.update_account_balance(balance)
+
+    return {
+        "updated": True,
+        "new_balance": balance,
+        "new_daily_limit": risk_manager.daily_loss_limit,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 # Main entry point

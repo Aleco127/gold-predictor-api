@@ -1,0 +1,55 @@
+# Ralph Progress Log
+Started: 2026-01-18T19:15:00.000Z
+Feature: Gold Predictor v2 - Advanced Trading Features
+Branch: ralph/gold-predictor-v2
+
+## Codebase Patterns
+
+### Project Structure
+- FastAPI server in src/api/server.py
+- ML models in src/models/
+- Data connectors in src/data/
+- Features in src/features/
+- Config in src/config.py
+
+### Key Files
+- src/api/server.py - Main API endpoints
+- src/data/capital_connector.py - Capital.com trading API
+- src/models/ensemble.py - LSTM + XGBoost ensemble
+- src/config.py - Settings and environment variables
+
+### Testing
+- Run with: python -m pytest tests/
+- Typecheck with: python -m mypy src/
+
+## Iteration Log
+
+### Iteration 1 - US-009: Daily Loss Limit Protection
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Created `src/trading/__init__.py` - Trading module init
+- Created `src/trading/risk_manager.py` - Full RiskManager class with:
+  - Daily P&L tracking
+  - Trade recording
+  - Daily loss limit enforcement (3% default)
+  - Max daily trades limit (50 default)
+  - Auto-reset at midnight UTC
+- Updated `src/config.py` - Added risk management settings
+- Updated `src/api/server.py` - Added risk management integration:
+  - RiskManager initialized in lifespan
+  - `/api/daily-stats` endpoint
+  - `/api/risk-status` endpoint
+  - `/api/record-pnl` endpoint
+  - `/api/update-balance` endpoint
+  - Risk check integrated into `/predict-and-trade`
+
+**Patterns Discovered:**
+- Use dataclasses for simple data containers (Trade, DailyStats)
+- Use datetime.now(timezone.utc) for consistent UTC timestamps
+- Global instances initialized in lifespan function
+- Pydantic BaseModel for API response models
+
+**Notes:**
+- Risk manager blocks trading when daily loss >= daily_loss_limit_pct of account balance
+- P&L should be recorded when positions close (not when opened)

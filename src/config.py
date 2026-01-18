@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     lstm_weight: float = 0.6
     xgb_weight: float = 0.4
 
+    # Risk Management
+    daily_loss_limit_pct: float = 3.0  # Max daily loss as % of account
+    max_daily_trades: int = 50  # Max trades per day
+    default_account_balance: float = 10000.0  # Default for risk calculations
+
     # Feature Configuration
     rsi_period: int = 14
     macd_fast: int = 12

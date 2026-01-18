@@ -1,0 +1,305 @@
+{
+  "projectName": "Gold Predictor v2 - Advanced Trading Features",
+  "description": "Enhance Gold Predictor with news sentiment analysis, economic calendar integration, multi-timeframe analysis, advanced risk management, performance tracking, and backtesting capabilities.",
+  "createdAt": "2026-01-18T19:15:00.000Z",
+  "targetApp": "gold-predictor",
+  "branchName": "ralph/gold-predictor-v2",
+  "userStories": [
+    {
+      "id": "US-009",
+      "title": "Daily Loss Limit Protection",
+      "description": "As a trader, I want the bot to stop trading if daily losses exceed a threshold to protect my account.",
+      "priority": 1,
+      "acceptanceCriteria": [
+        "Create src/trading/risk_manager.py with RiskManager class",
+        "Track daily P&L from all closed trades",
+        "Configurable daily loss limit (default: 3% of account)",
+        "Block new trades when limit reached",
+        "Reset counter at midnight UTC",
+        "API endpoint /api/daily-stats shows current P&L",
+        "Typecheck passes"
+      ],
+      "files": ["src/trading/risk_manager.py", "src/api/server.py"],
+      "dependencies": [],
+      "passes": true,
+      "notes": "Implemented RiskManager with daily P&L tracking, loss limit protection, and API endpoints"
+    },
+    {
+      "id": "US-010",
+      "title": "Volatility-Adjusted Position Sizing",
+      "description": "As a trader, I want position sizes to adjust based on current volatility (smaller in high volatility).",
+      "priority": 2,
+      "acceptanceCriteria": [
+        "Calculate current ATR vs 20-period average ATR",
+        "Reduce position size when ATR > 1.5x average",
+        "Increase position size when ATR < 0.7x average",
+        "Never exceed max position size (configurable)",
+        "Log position size adjustments",
+        "Integrate with /predict-and-trade endpoint",
+        "Typecheck passes"
+      ],
+      "files": ["src/trading/risk_manager.py", "src/api/server.py"],
+      "dependencies": ["US-009"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Trailing Stop-Loss Implementation",
+      "description": "As a trader, I want trailing stops that lock in profits as the trade moves in my favor.",
+      "priority": 3,
+      "acceptanceCriteria": [
+        "Create src/trading/position_manager.py with PositionManager class",
+        "Implement trailing stop logic in Capital.com connector",
+        "Configurable trailing distance (default: 1.5x ATR)",
+        "Trailing activates after trade is in profit by X pips",
+        "Update stop-loss via API when price moves favorably",
+        "Typecheck passes"
+      ],
+      "files": ["src/trading/position_manager.py", "src/data/capital_connector.py", "src/api/server.py"],
+      "dependencies": [],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Partial Take-Profit Levels",
+      "description": "As a trader, I want to take partial profits at multiple levels (TP1, TP2, TP3) to secure gains.",
+      "priority": 4,
+      "acceptanceCriteria": [
+        "Calculate 3 TP levels based on ATR (1x, 2x, 3x ATR)",
+        "Close 50% at TP1, 30% at TP2, 20% at TP3",
+        "Move stop-loss to breakeven after TP1 hit",
+        "Track partial closes in trade log",
+        "Return TP levels in trade response",
+        "Typecheck passes"
+      ],
+      "files": ["src/trading/position_manager.py", "src/data/capital_connector.py"],
+      "dependencies": ["US-007"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-001",
+      "title": "Economic Calendar API Integration",
+      "description": "As a trader, I want the bot to know about upcoming high-impact economic events so that it can avoid trading during extreme volatility.",
+      "priority": 5,
+      "acceptanceCriteria": [
+        "Create src/data/economic_calendar.py with EconomicCalendar class",
+        "Fetch events from Forex Factory or similar free source",
+        "Fetch events for next 24 hours on startup and every hour",
+        "Identify high-impact events (Fed rate decision, CPI, NFP, GDP)",
+        "Store events in memory with impact level (low/medium/high)",
+        "API endpoint /api/calendar returns upcoming events",
+        "Typecheck passes"
+      ],
+      "files": ["src/data/economic_calendar.py", "src/api/server.py", "requirements.txt"],
+      "dependencies": [],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Trading Pause During High-Impact Events",
+      "description": "As a trader, I want the bot to automatically pause trading 30 minutes before and 30 minutes after high-impact news events.",
+      "priority": 6,
+      "acceptanceCriteria": [
+        "Create NewsFilter class that checks if trading is allowed",
+        "Configurable pause window (default: 30 min before, 30 min after)",
+        "High-impact events: Fed, CPI, NFP, GDP, Unemployment",
+        "/predict-and-trade endpoint checks news filter before trading",
+        "Returns news_paused: true with event details when blocked",
+        "Update n8n workflow to handle news pause response",
+        "Typecheck passes"
+      ],
+      "files": ["src/data/economic_calendar.py", "src/api/server.py", "n8n-workflows/gold-prediction-trade.json"],
+      "dependencies": ["US-001"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "News Sentiment API Integration",
+      "description": "As a trader, I want the bot to analyze financial news sentiment to improve prediction accuracy.",
+      "priority": 7,
+      "acceptanceCriteria": [
+        "Create src/data/news_fetcher.py with NewsFetcher class",
+        "Integrate NewsAPI or Alpha Vantage News API",
+        "Fetch gold-related news (keywords: gold, XAUUSD, precious metals, Fed, inflation)",
+        "Store last 24 hours of headlines",
+        "API endpoint /api/news returns recent news",
+        "Environment variable NEWS_API_KEY in config",
+        "Typecheck passes"
+      ],
+      "files": ["src/data/news_fetcher.py", "src/api/server.py", "src/config.py", ".env.example"],
+      "dependencies": [],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "FinBERT Sentiment Analysis",
+      "description": "As a trader, I want news headlines analyzed for sentiment (bullish/bearish/neutral) to add as a prediction feature.",
+      "priority": 8,
+      "acceptanceCriteria": [
+        "Create src/features/sentiment_analyzer.py with SentimentAnalyzer class",
+        "Implement FinBERT sentiment analysis using transformers library",
+        "Score each headline: -1 (bearish) to +1 (bullish)",
+        "Calculate aggregate sentiment score for last 4 hours",
+        "Cache sentiment scores to avoid recomputation",
+        "API endpoint /api/sentiment returns current sentiment",
+        "Typecheck passes"
+      ],
+      "files": ["src/features/sentiment_analyzer.py", "src/api/server.py", "requirements.txt"],
+      "dependencies": ["US-003"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Trade History Database",
+      "description": "As a trader, I want all trades logged to a database for performance analysis.",
+      "priority": 9,
+      "acceptanceCriteria": [
+        "Create src/storage/trade_database.py with TradeDatabase class",
+        "Create SQLite database for trade history",
+        "Log: timestamp, direction, entry, exit, P&L, signal, confidence",
+        "Log prediction vs actual outcome",
+        "API endpoint /api/trades returns trade history",
+        "Filter by date range, direction, outcome",
+        "Typecheck passes"
+      ],
+      "files": ["src/storage/trade_database.py", "src/api/server.py", "src/data/capital_connector.py"],
+      "dependencies": [],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Performance Metrics API",
+      "description": "As a trader, I want to see key performance metrics (win rate, profit factor, Sharpe ratio).",
+      "priority": 10,
+      "acceptanceCriteria": [
+        "Calculate: win rate, profit factor, avg win/loss, max drawdown",
+        "Calculate Sharpe ratio (annualized)",
+        "Calculate expectancy per trade",
+        "API endpoint /api/performance returns all metrics",
+        "Filter by time period (7d, 30d, 90d, all)",
+        "Typecheck passes"
+      ],
+      "files": ["src/monitoring/performance_tracker.py", "src/api/server.py"],
+      "dependencies": ["US-011"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Daily Performance Telegram Report",
+      "description": "As a trader, I want a daily summary report sent via Telegram with my trading performance.",
+      "priority": 11,
+      "acceptanceCriteria": [
+        "Create /api/daily-report endpoint that generates report",
+        "Include: trades taken, win rate, P&L, best/worst trade",
+        "Include equity change and drawdown",
+        "Create n8n workflow daily-report.json for scheduled report",
+        "Beautiful formatted Telegram message with emojis",
+        "Schedule for 22:00 UTC on trading days",
+        "Typecheck passes"
+      ],
+      "files": ["src/api/server.py", "n8n-workflows/daily-report.json"],
+      "dependencies": ["US-012"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Multi-Timeframe Data Fetching",
+      "description": "As a trader, I want the bot to analyze multiple timeframes (M5, M15, H1, H4) for better trend confirmation.",
+      "priority": 12,
+      "acceptanceCriteria": [
+        "Create src/features/multi_timeframe.py with MultiTimeframeAnalyzer class",
+        "Fetch data for M5, M15, H1, H4 timeframes from Capital.com",
+        "Store each timeframe's recent data (200 bars)",
+        "Calculate indicators for each timeframe",
+        "Typecheck passes"
+      ],
+      "files": ["src/features/multi_timeframe.py", "src/data/capital_connector.py"],
+      "dependencies": [],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Timeframe Confluence Scoring",
+      "description": "As a trader, I want a confluence score that shows when multiple timeframes agree on direction.",
+      "priority": 13,
+      "acceptanceCriteria": [
+        "Calculate trend direction for each timeframe (EMA crossover)",
+        "Calculate RSI condition for each timeframe",
+        "Generate confluence score: 0-100% (100% = all timeframes agree)",
+        "Add confluence score to prediction output",
+        "Higher confluence = higher confidence in signal",
+        "Typecheck passes"
+      ],
+      "files": ["src/features/multi_timeframe.py", "src/models/ensemble.py", "src/api/server.py"],
+      "dependencies": ["US-005"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Historical Data Storage",
+      "description": "As a trader, I want historical price data stored locally for backtesting.",
+      "priority": 14,
+      "acceptanceCriteria": [
+        "Create src/storage/historical_data.py with HistoricalDataStore class",
+        "Download and store 1 year of M5 data for XAUUSD",
+        "Store in Parquet format for efficient access",
+        "Create scripts/update_historical.py to update data daily",
+        "API endpoint /api/historical returns data range info",
+        "Typecheck passes"
+      ],
+      "files": ["src/storage/historical_data.py", "scripts/update_historical.py", "src/api/server.py", "requirements.txt"],
+      "dependencies": [],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Backtesting Engine",
+      "description": "As a trader, I want to backtest the current strategy on historical data.",
+      "priority": 15,
+      "acceptanceCriteria": [
+        "Create src/backtesting/backtest_engine.py with BacktestEngine class",
+        "Simulate trades using historical data",
+        "Apply same entry/exit logic as live trading",
+        "Track simulated P&L, drawdown, win rate",
+        "Generate backtest report with metrics",
+        "API endpoint /api/backtest runs backtest",
+        "Typecheck passes"
+      ],
+      "files": ["src/backtesting/backtest_engine.py", "src/api/server.py"],
+      "dependencies": ["US-014"],
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Walk-Forward Validation Report",
+      "description": "As a trader, I want walk-forward validation to ensure the model isn't overfit.",
+      "priority": 16,
+      "acceptanceCriteria": [
+        "Split data into training/validation windows",
+        "Train on window N, test on window N+1",
+        "Report performance consistency across windows",
+        "Flag if performance degrades significantly",
+        "Include walk-forward results in /api/backtest response",
+        "Typecheck passes"
+      ],
+      "files": ["src/backtesting/backtest_engine.py", "src/preprocessing/data_processor.py"],
+      "dependencies": ["US-015"],
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
