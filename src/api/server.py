@@ -37,7 +37,12 @@ from ..storage.trade_database import TradeDatabase, TradeFilter, TradeSummary
 from ..monitoring.performance_tracker import TradingPerformanceTracker, PerformanceMetrics, DrawdownInfo
 from ..features.multi_timeframe import MultiTimeframeAnalyzer, MultiTimeframeAnalysis, TimeframeData
 from ..storage.historical_data import HistoricalDataStore, DataRangeInfo
-from ..backtesting.backtest_engine import BacktestEngine, BacktestResult
+from ..backtesting.backtest_engine import (
+    BacktestEngine,
+    BacktestResult,
+    WalkForwardResult,
+    run_walk_forward_validation,
+)
 
 # Global instances
 predictor: Optional[EnsemblePredictor] = None
@@ -3688,6 +3693,130 @@ async def get_backtest_status(
         "status": "ready",
         "config": backtest_engine.get_status(),
     }
+
+
+class WalkForwardRequest(BaseModel):
+    """Request model for walk-forward validation."""
+    symbol: str = Field(default="XAUUSD", description="Trading symbol")
+    timeframe: str = Field(default="M5", description="Timeframe")
+    train_days: int = Field(default=30, ge=7, le=90, description="Training period in days")
+    test_days: int = Field(default=7, ge=1, le=30, description="Testing period in days")
+    num_windows: int = Field(default=4, ge=2, le=10, description="Number of walk-forward windows")
+
+
+@app.post("/api/backtest/walk-forward")
+async def run_walk_forward(
+    request: WalkForwardRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Run walk-forward validation to detect overfitting.
+
+    Walk-forward validation splits data into training/testing windows
+    and validates that performance is consistent across time periods.
+
+    Returns:
+    - Window-by-window results
+    - Aggregated metrics
+    - Consistency score (0-100%)
+    - Degradation warnings
+    - Overall robustness assessment
+    """
+    global backtest_engine, historical_store
+
+    if backtest_engine is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Backtest engine not initialized",
+        )
+
+    if historical_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Historical data store not initialized",
+        )
+
+    logger.info(
+        f"Starting walk-forward validation: {request.symbol} {request.timeframe} "
+        f"(train={request.train_days}d, test={request.test_days}d, windows={request.num_windows})"
+    )
+
+    try:
+        # Run walk-forward validation
+        result = run_walk_forward_validation(
+            backtest_engine=backtest_engine,
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            train_days=request.train_days,
+            test_days=request.test_days,
+            num_windows=request.num_windows,
+        )
+
+        # Format window results
+        windows_data = []
+        for window in result.windows:
+            windows_data.append({
+                "window_number": window.window_number,
+                "train_period": {
+                    "start": window.train_start.isoformat(),
+                    "end": window.train_end.isoformat(),
+                    "bars": window.train_bars,
+                },
+                "test_period": {
+                    "start": window.test_start.isoformat(),
+                    "end": window.test_end.isoformat(),
+                    "bars": window.test_bars,
+                },
+                "test_metrics": {
+                    "total_trades": window.test_metrics.total_trades,
+                    "win_rate": window.test_metrics.win_rate,
+                    "profit_factor": window.test_metrics.profit_factor,
+                    "total_pnl": window.test_metrics.total_pnl,
+                    "max_drawdown_pct": window.test_metrics.max_drawdown_pct,
+                    "sharpe_ratio": window.test_metrics.sharpe_ratio,
+                },
+                "test_trades_count": window.test_trades_count,
+            })
+
+        return {
+            "symbol": result.symbol,
+            "timeframe": result.timeframe,
+            "validation_config": {
+                "total_windows": result.total_windows,
+                "train_period_days": result.train_period_days,
+                "test_period_days": result.test_period_days,
+            },
+            "windows": windows_data,
+            "aggregated_metrics": result.aggregated_metrics,
+            "consistency_score": result.consistency_score,
+            "degradation_warnings": result.degradation_warnings,
+            "is_robust": result.is_robust,
+            "run_time_seconds": result.run_time_seconds,
+            "summary": {
+                "status": "ROBUST" if result.is_robust else "POTENTIAL_OVERFIT",
+                "message": (
+                    "Model shows consistent performance across time periods"
+                    if result.is_robust
+                    else "Model may be overfit - performance degrades on new data"
+                ),
+                "recommendation": (
+                    "Safe to use in production"
+                    if result.is_robust
+                    else "Review model parameters and consider retraining"
+                ),
+            },
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Walk-forward validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Walk-forward validation failed: {str(e)}",
+        )
 
 
 def _get_confluence_recommendation(score: float, trend: str) -> str:

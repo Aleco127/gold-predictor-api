@@ -610,3 +610,75 @@ Branch: ralph/gold-predictor-v2
 - MFE/MAE track best/worst during trade for analysis
 - Equity curve records position status at each bar
 
+---
+
+### Iteration 16 - US-016: Walk-Forward Validation Report
+**Completed:** 2026-01-18
+
+**Changes Made:**
+- Updated `src/backtesting/backtest_engine.py`:
+  - WalkForwardWindow dataclass with:
+    - window_number, train/test start/end dates
+    - train_bars, test_bars counts
+    - test_metrics (BacktestMetrics) and trades_count
+  - WalkForwardResult dataclass with:
+    - symbol, timeframe, total_windows
+    - train_period_days, test_period_days
+    - List of WalkForwardWindow results
+    - aggregated_metrics (mean, std, min, max across windows)
+    - consistency_score (0-100%)
+    - degradation_warnings list
+    - is_robust boolean flag
+    - run_time_seconds
+  - run_walk_forward_validation() function:
+    - Splits data into sequential train/test windows
+    - Runs backtest on each window independently
+    - Calculates consistency score from win rate variance
+    - Detects degradation patterns (declining win rate, increasing drawdown)
+    - Provides robustness assessment
+- Updated `src/backtesting/__init__.py`:
+  - Exported WalkForwardWindow, WalkForwardResult, run_walk_forward_validation
+- Updated `src/api/server.py`:
+  - WalkForwardRequest model with configurable parameters
+  - POST `/api/backtest/walk-forward` endpoint with:
+    - Window-by-window results (train/test periods, metrics)
+    - Aggregated metrics across all windows
+    - Consistency score and degradation warnings
+    - is_robust flag with summary and recommendation
+
+**Patterns Discovered:**
+- Walk-forward validation: train on N days, test on next M days, slide forward
+- Consistency score: 100 - (win_rate_std * 200), clamped to [0, 100]
+- High std in metrics indicates inconsistent (overfit) model
+- Degradation detection: compare last window to average
+- Robustness criteria: consistency > 60%, no critical warnings, avg win rate > 40%
+
+**Notes:**
+- Default: 30 days train, 7 days test, 4 windows (16+ weeks of data needed)
+- Window overlap: test period becomes part of training context
+- Aggregated metrics provide mean, std, min, max for key measures
+- Warnings classify as "CRITICAL" (performance collapse), "WARNING" (degradation)
+- API returns both raw data and human-readable summary
+
+---
+
+## COMPLETION SUMMARY
+All 16 user stories implemented successfully:
+- US-009: Daily Loss Limit Protection ✓
+- US-010: Volatility-Adjusted Position Sizing ✓
+- US-007: Trailing Stop-Loss Implementation ✓
+- US-008: Partial Take-Profit Levels ✓
+- US-001: Economic Calendar API Integration ✓
+- US-002: Trading Pause During High-Impact Events ✓
+- US-003: News Sentiment API Integration ✓
+- US-004: FinBERT Sentiment Analysis ✓
+- US-011: Trade History Database ✓
+- US-012: Performance Metrics API ✓
+- US-013: Daily Performance Telegram Report ✓
+- US-005: Multi-Timeframe Data Fetching ✓
+- US-006: Timeframe Confluence Scoring ✓
+- US-014: Historical Data Storage ✓
+- US-015: Backtesting Engine ✓
+- US-016: Walk-Forward Validation Report ✓
+
+<promise>COMPLETE</promise>

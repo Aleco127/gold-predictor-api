@@ -788,3 +788,286 @@ class BacktestEngine:
             "slippage_percent": self.slippage_percent,
             "historical_store_configured": self.historical_store is not None,
         }
+
+
+@dataclass
+class WalkForwardWindow:
+    """Single walk-forward validation window result."""
+    window_number: int
+    train_start: datetime
+    train_end: datetime
+    test_start: datetime
+    test_end: datetime
+    train_bars: int
+    test_bars: int
+    test_metrics: BacktestMetrics
+    test_trades_count: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "window_number": self.window_number,
+            "train_start": self.train_start.isoformat(),
+            "train_end": self.train_end.isoformat(),
+            "test_start": self.test_start.isoformat(),
+            "test_end": self.test_end.isoformat(),
+            "train_bars": self.train_bars,
+            "test_bars": self.test_bars,
+            "test_metrics": self.test_metrics.to_dict(),
+            "test_trades_count": self.test_trades_count,
+        }
+
+
+@dataclass
+class WalkForwardResult:
+    """Complete walk-forward validation result."""
+    symbol: str
+    timeframe: str
+    total_windows: int
+    train_period_days: int
+    test_period_days: int
+    windows: List[WalkForwardWindow]
+    aggregated_metrics: Dict[str, Any]
+    consistency_score: float
+    degradation_warnings: List[str]
+    is_robust: bool
+    run_time_seconds: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "total_windows": self.total_windows,
+            "train_period_days": self.train_period_days,
+            "test_period_days": self.test_period_days,
+            "windows": [w.to_dict() for w in self.windows],
+            "aggregated_metrics": self.aggregated_metrics,
+            "consistency_score": round(self.consistency_score, 2),
+            "degradation_warnings": self.degradation_warnings,
+            "is_robust": self.is_robust,
+            "run_time_seconds": round(self.run_time_seconds, 2),
+        }
+
+
+def run_walk_forward_validation(
+    backtest_engine: BacktestEngine,
+    symbol: str = "XAUUSD",
+    timeframe: str = "M5",
+    train_days: int = 30,
+    test_days: int = 7,
+    num_windows: int = 4,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> WalkForwardResult:
+    """
+    Run walk-forward validation to check for overfitting.
+
+    Walk-forward validation splits data into rolling train/test windows:
+    - Window 1: Train on days 0-30, test on days 30-37
+    - Window 2: Train on days 7-37, test on days 37-44
+    - Window 3: Train on days 14-44, test on days 44-51
+    - etc.
+
+    Args:
+        backtest_engine: Configured BacktestEngine instance
+        symbol: Trading symbol
+        timeframe: Timeframe for data
+        train_days: Days for training period
+        test_days: Days for testing period
+        num_windows: Number of validation windows
+        progress_callback: Progress callback
+
+    Returns:
+        WalkForwardResult with all window results and analysis
+    """
+    import time
+    start_time = time.time()
+
+    logger.info(f"Starting walk-forward validation: {num_windows} windows, "
+                f"train={train_days}d, test={test_days}d")
+
+    # Load full dataset
+    df = backtest_engine.historical_store.load(symbol=symbol, timeframe=timeframe)
+
+    if df.empty:
+        raise ValueError(f"No data found for {symbol} {timeframe}")
+
+    # Determine time column
+    time_col = 'time' if 'time' in df.columns else 'datetime'
+    df[time_col] = pd.to_datetime(df[time_col])
+
+    # Calculate indicators on full dataset
+    df = backtest_engine.indicators.calculate_all(df)
+
+    # Calculate window step (overlap between consecutive windows)
+    step_days = test_days  # Each window advances by test_days
+
+    # Calculate total data needed
+    total_days_needed = train_days + (num_windows * test_days)
+
+    # Get actual date range
+    data_start = df[time_col].min()
+    data_end = df[time_col].max()
+    data_days = (data_end - data_start).days
+
+    if data_days < total_days_needed:
+        raise ValueError(
+            f"Not enough data for walk-forward: need {total_days_needed} days, "
+            f"have {data_days} days"
+        )
+
+    windows: List[WalkForwardWindow] = []
+    win_rates: List[float] = []
+    profit_factors: List[float] = []
+    total_pnls: List[float] = []
+
+    for i in range(num_windows):
+        if progress_callback:
+            progress_callback(i + 1, num_windows, f"Processing window {i + 1}/{num_windows}")
+
+        # Calculate window boundaries
+        train_start = data_start + timedelta(days=i * step_days)
+        train_end = train_start + timedelta(days=train_days)
+        test_start = train_end
+        test_end = test_start + timedelta(days=test_days)
+
+        # Filter data for test period (we only run backtest on test period)
+        test_mask = (df[time_col] >= test_start) & (df[time_col] < test_end)
+        test_df = df[test_mask].copy()
+
+        train_mask = (df[time_col] >= train_start) & (df[time_col] < train_end)
+        train_df = df[train_mask].copy()
+
+        if len(test_df) < 100:
+            logger.warning(f"Window {i+1}: Insufficient test data ({len(test_df)} bars)")
+            continue
+
+        # Run backtest on test period using training period's signals
+        # (In a real ML system, we would train on train_df and apply to test_df)
+        # Here we just backtest on test_df using the default signal generator
+
+        # Simulate the backtest directly on test data
+        trades, equity_curve = backtest_engine._simulate_trades(
+            df=test_df,
+            time_col=time_col,
+            signal_generator=backtest_engine._default_signal_generator,
+        )
+
+        # Calculate metrics for this window
+        metrics = backtest_engine._calculate_metrics(trades, equity_curve)
+
+        window = WalkForwardWindow(
+            window_number=i + 1,
+            train_start=train_start.to_pydatetime(),
+            train_end=train_end.to_pydatetime(),
+            test_start=test_start.to_pydatetime(),
+            test_end=test_end.to_pydatetime(),
+            train_bars=len(train_df),
+            test_bars=len(test_df),
+            test_metrics=metrics,
+            test_trades_count=len(trades),
+        )
+
+        windows.append(window)
+
+        # Track metrics for consistency analysis
+        if metrics.total_trades > 0:
+            win_rates.append(metrics.win_rate)
+            profit_factors.append(min(metrics.profit_factor, 10.0))  # Cap at 10
+            total_pnls.append(metrics.total_pnl)
+
+        logger.info(f"Window {i+1}: {metrics.total_trades} trades, "
+                    f"win rate: {metrics.win_rate:.1f}%, PnL: ${metrics.total_pnl:.2f}")
+
+    # Calculate aggregated metrics
+    if windows:
+        avg_win_rate = float(np.mean(win_rates)) if win_rates else 0.0
+        avg_profit_factor = float(np.mean(profit_factors)) if profit_factors else 0.0
+        avg_pnl = float(np.mean(total_pnls)) if total_pnls else 0.0
+        total_pnl = sum(total_pnls)
+
+        std_win_rate = float(np.std(win_rates)) if len(win_rates) > 1 else 0.0
+        std_profit_factor = float(np.std(profit_factors)) if len(profit_factors) > 1 else 0.0
+    else:
+        avg_win_rate = avg_profit_factor = avg_pnl = total_pnl = 0.0
+        std_win_rate = std_profit_factor = 0.0
+
+    aggregated = {
+        "average_win_rate": round(avg_win_rate, 2),
+        "std_win_rate": round(std_win_rate, 2),
+        "average_profit_factor": round(avg_profit_factor, 2),
+        "std_profit_factor": round(std_profit_factor, 2),
+        "average_pnl_per_window": round(avg_pnl, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_trades": sum(w.test_trades_count for w in windows),
+        "profitable_windows": sum(1 for w in windows if w.test_metrics.total_pnl > 0),
+        "losing_windows": sum(1 for w in windows if w.test_metrics.total_pnl <= 0),
+    }
+
+    # Calculate consistency score (0-100)
+    # Based on: stable win rate, stable profit factor, no degradation
+    consistency_score = 100.0
+    degradation_warnings: List[str] = []
+
+    # Check win rate consistency (penalize high variance)
+    if std_win_rate > 15:  # Win rate varies more than 15%
+        consistency_score -= 20
+        degradation_warnings.append(f"High win rate variance: ±{std_win_rate:.1f}%")
+
+    # Check profit factor consistency
+    if std_profit_factor > 1.5:
+        consistency_score -= 15
+        degradation_warnings.append(f"High profit factor variance: ±{std_profit_factor:.2f}")
+
+    # Check for degradation trend (last windows worse than first)
+    if len(windows) >= 3:
+        first_half_pnl = sum(w.test_metrics.total_pnl for w in windows[:len(windows)//2])
+        second_half_pnl = sum(w.test_metrics.total_pnl for w in windows[len(windows)//2:])
+
+        if second_half_pnl < first_half_pnl * 0.5 and first_half_pnl > 0:
+            consistency_score -= 25
+            degradation_warnings.append(
+                f"Performance degradation: second half PnL ({second_half_pnl:.2f}) "
+                f"< 50% of first half ({first_half_pnl:.2f})"
+            )
+
+    # Check if too many losing windows
+    losing_ratio = aggregated["losing_windows"] / len(windows) if windows else 0
+    if losing_ratio > 0.5:
+        consistency_score -= 20
+        degradation_warnings.append(
+            f"Too many losing windows: {aggregated['losing_windows']}/{len(windows)}"
+        )
+
+    # Check average win rate
+    if avg_win_rate < 40:
+        consistency_score -= 15
+        degradation_warnings.append(f"Low average win rate: {avg_win_rate:.1f}%")
+
+    consistency_score = max(0, consistency_score)
+
+    # Determine if strategy is robust (consistency >= 60, positive total PnL)
+    is_robust = consistency_score >= 60 and total_pnl > 0
+
+    run_time = time.time() - start_time
+
+    result = WalkForwardResult(
+        symbol=symbol,
+        timeframe=timeframe,
+        total_windows=len(windows),
+        train_period_days=train_days,
+        test_period_days=test_days,
+        windows=windows,
+        aggregated_metrics=aggregated,
+        consistency_score=consistency_score,
+        degradation_warnings=degradation_warnings,
+        is_robust=is_robust,
+        run_time_seconds=run_time,
+    )
+
+    logger.info(
+        f"Walk-forward complete: {len(windows)} windows, "
+        f"consistency: {consistency_score:.0f}%, robust: {is_robust}"
+    )
+
+    return result

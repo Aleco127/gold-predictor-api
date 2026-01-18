@@ -13,6 +13,9 @@ from .backtest_engine import (
     BacktestResult,
     BacktestMetrics,
     BacktestTrade,
+    WalkForwardWindow,
+    WalkForwardResult,
+    run_walk_forward_validation,
 )
 
 __all__ = [
@@ -28,4 +31,8 @@ __all__ = [
     "BacktestResult",
     "BacktestMetrics",
     "BacktestTrade",
+    # Walk-forward validation
+    "WalkForwardWindow",
+    "WalkForwardResult",
+    "run_walk_forward_validation",
 ]
