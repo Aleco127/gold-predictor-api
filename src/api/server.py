@@ -1455,7 +1455,7 @@ async def get_bot_status(api_key: str = Depends(verify_api_key)):
 
     # Positions
     if position_manager:
-        active = len(position_manager.tracked_positions)
+        active = len(position_manager.get_all_positions())
         status_parts.append(f"📍 Positions: {active}")
 
     return {
