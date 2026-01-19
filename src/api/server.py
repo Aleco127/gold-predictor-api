@@ -1448,7 +1448,7 @@ async def get_bot_status(api_key: str = Depends(verify_api_key)):
             status_parts.append(f"⚠️ Blocked: {reason}")
 
     # Model status
-    if predictor and predictor.is_loaded:
+    if predictor and predictor.lstm_model is not None:
         status_parts.append("🤖 Model: Loaded")
     else:
         status_parts.append("⚠️ Model: Not loaded")
