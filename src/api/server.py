@@ -1316,7 +1316,7 @@ async def update_bot_config(
     if request.daily_loss_limit_pct is not None:
         old = risk_manager.daily_loss_limit_pct
         risk_manager.daily_loss_limit_pct = request.daily_loss_limit_pct
-        risk_manager.daily_loss_limit = risk_manager.account_balance * (request.daily_loss_limit_pct / 100)
+        # Note: daily_loss_limit is a computed property, no need to set it directly
         changes.append(f"daily_loss_limit: {old}% → {request.daily_loss_limit_pct}%")
 
     if request.max_daily_trades is not None:
