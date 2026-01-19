@@ -1,0 +1,253 @@
+{
+  "name": "Gold Predictor - Telegram Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "node-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the command from Telegram message\nconst text = $input.first().json.message?.text || '';\nconst chatId = $input.first().json.message?.chat?.id;\n\nlet command = 'unknown';\nlet params = [];\n\nif (text.startsWith('/status')) command = 'status';\nelse if (text.startsWith('/config')) command = 'config';\nelse if (text.startsWith('/enable')) command = 'enable';\nelse if (text.startsWith('/disable')) command = 'disable';\nelse if (text.startsWith('/help')) command = 'help';\nelse if (text.startsWith('/set')) {\n  command = 'set';\n  params = text.replace('/set', '').trim().split(' ');\n}\n\nreturn [{ json: { command, chatId, params, originalText: text } }];"
+      },
+      "id": "node-parse",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "status", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "config", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "config"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "enable", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "enable"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "disable", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "disable"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "help", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-switch",
+      "name": "Route Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gold-predictor:8000/api/bot/status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "gp_sk_live_2026_gold_predictor_secure" }]
+        },
+        "options": {}
+      },
+      "id": "node-get-status",
+      "name": "API Get Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 100]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gold-predictor:8000/api/bot/config",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "gp_sk_live_2026_gold_predictor_secure" }]
+        },
+        "options": {}
+      },
+      "id": "node-get-config",
+      "name": "API Get Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gold-predictor:8000/api/bot/trading/enable",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "gp_sk_live_2026_gold_predictor_secure" }]
+        },
+        "options": {}
+      },
+      "id": "node-enable",
+      "name": "API Enable",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gold-predictor:8000/api/bot/trading/disable",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "gp_sk_live_2026_gold_predictor_secure" }]
+        },
+        "options": {}
+      },
+      "id": "node-disable",
+      "name": "API Disable",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 580]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gold-predictor:8000/api/bot/help",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-API-Key", "value": "gp_sk_live_2026_gold_predictor_secure" }]
+        },
+        "options": {}
+      },
+      "id": "node-help",
+      "name": "API Help",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 740]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').item.json.chatId }}",
+        "text": "={{ $json.status_text }}",
+        "additionalFields": {}
+      },
+      "id": "node-send-status",
+      "name": "Send Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1160, 100]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').item.json.chatId }}",
+        "text": "=<b>Config</b>\n\nDaily Loss: {{ $json.daily_loss_limit_pct }}%\nMax Trades: {{ $json.max_daily_trades }}\nBalance: ${{ $json.account_balance }}\nPosition: {{ $json.base_position_size }} lots\nTrailing: {{ $json.trailing_atr_multiplier }}x ATR\nConfidence: {{ Math.round($json.confidence_threshold * 100) }}%\n\nTrading: {{ $json.trading_enabled ? 'ON' : 'OFF' }}",
+        "additionalFields": { "parse_mode": "HTML" }
+      },
+      "id": "node-send-config",
+      "name": "Send Config",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1160, 260]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').item.json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "node-send-enable",
+      "name": "Send Enable",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1160, 420]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').item.json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "node-send-disable",
+      "name": "Send Disable",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1160, 580]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').item.json.chatId }}",
+        "text": "<b>Comandos</b>\n\n/status - Estado del bot\n/config - Ver config\n/enable - Activar\n/disable - Desactivar\n/help - Ayuda",
+        "additionalFields": { "parse_mode": "HTML" }
+      },
+      "id": "node-send-help",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1160, 740]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{ "node": "Parse Command", "type": "main", "index": 0 }]]
+    },
+    "Parse Command": {
+      "main": [[{ "node": "Route Command", "type": "main", "index": 0 }]]
+    },
+    "Route Command": {
+      "main": [
+        [{ "node": "API Get Status", "type": "main", "index": 0 }],
+        [{ "node": "API Get Config", "type": "main", "index": 0 }],
+        [{ "node": "API Enable", "type": "main", "index": 0 }],
+        [{ "node": "API Disable", "type": "main", "index": 0 }],
+        [{ "node": "API Help", "type": "main", "index": 0 }]
+      ]
+    },
+    "API Get Status": { "main": [[{ "node": "Send Status", "type": "main", "index": 0 }]] },
+    "API Get Config": { "main": [[{ "node": "Send Config", "type": "main", "index": 0 }]] },
+    "API Enable": { "main": [[{ "node": "Send Enable", "type": "main", "index": 0 }]] },
+    "API Disable": { "main": [[{ "node": "Send Disable", "type": "main", "index": 0 }]] },
+    "API Help": { "main": [[{ "node": "Send Help", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "active": false
+}

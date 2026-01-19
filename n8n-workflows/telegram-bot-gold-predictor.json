@@ -1,0 +1,394 @@
+{
+  "name": "Telegram Bot - Gold Predictor Control",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "gold-predictor-bot"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-status",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/status",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-status",
+      "name": "Is /status?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-config",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/config",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-config",
+      "name": "Is /config?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-enable",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/enable",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-enable",
+      "name": "Is /enable?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-disable",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/disable",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-disable",
+      "name": "Is /disable?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 700]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-help",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/help",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-help",
+      "name": "Is /help?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 900]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gold-predictor:8000/api/bot/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-status",
+      "name": "Get Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api",
+          "name": "Gold Predictor API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gold-predictor:8000/api/bot/config",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-config",
+      "name": "Get Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api",
+          "name": "Gold Predictor API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gold-predictor:8000/api/bot/trading/enable",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "enable-trading",
+      "name": "Enable Trading",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api",
+          "name": "Gold Predictor API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gold-predictor:8000/api/bot/trading/disable",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "disable-trading",
+      "name": "Disable Trading",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api",
+          "name": "Gold Predictor API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gold-predictor:8000/api/bot/help",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-help",
+      "name": "Get Help",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 800],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gold-api",
+          "name": "Gold Predictor API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.status_text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "send-status",
+      "name": "Send Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=<b>Gold Predictor Config</b>\n\nDaily Loss Limit: {{ $json.daily_loss_limit_pct }}%\nMax Daily Trades: {{ $json.max_daily_trades }}\nAccount Balance: ${{ $json.account_balance }}\nBase Position: {{ $json.base_position_size }} lots\nMax Position: {{ $json.max_position_size }} lots\nTrailing ATR: {{ $json.trailing_atr_multiplier }}x\nConfidence: {{ $json.confidence_threshold * 100 }}%\n\nTrading: {{ $json.trading_enabled ? 'ENABLED' : 'DISABLED' }}\nDaily P&L: ${{ $json.current_daily_pnl }}\nTrades Today: {{ $json.trades_today }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "send-config",
+      "name": "Send Config",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "send-enable",
+      "name": "Send Enable Result",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1000, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "send-disable",
+      "name": "Send Disable Result",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1000, 600]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=<b>Gold Predictor Commands</b>\n\n/status - Ver estado del bot\n/config - Ver configuracion\n/enable - Activar trading\n/disable - Desactivar trading\n/help - Ver comandos\n\n<b>Parametros configurables:</b>\n{{ Object.entries($json.parameters).map(([k,v]) => k + ': ' + v).join('\\n') }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "send-help",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1000, 800]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {"node": "Is /status?", "type": "main", "index": 0},
+          {"node": "Is /config?", "type": "main", "index": 0},
+          {"node": "Is /enable?", "type": "main", "index": 0},
+          {"node": "Is /disable?", "type": "main", "index": 0},
+          {"node": "Is /help?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Is /status?": {
+      "main": [
+        [{"node": "Get Status", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Is /config?": {
+      "main": [
+        [{"node": "Get Config", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Is /enable?": {
+      "main": [
+        [{"node": "Enable Trading", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Is /disable?": {
+      "main": [
+        [{"node": "Disable Trading", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Is /help?": {
+      "main": [
+        [{"node": "Get Help", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Get Status": {
+      "main": [[{"node": "Send Status", "type": "main", "index": 0}]]
+    },
+    "Get Config": {
+      "main": [[{"node": "Send Config", "type": "main", "index": 0}]]
+    },
+    "Enable Trading": {
+      "main": [[{"node": "Send Enable Result", "type": "main", "index": 0}]]
+    },
+    "Disable Trading": {
+      "main": [[{"node": "Send Disable Result", "type": "main", "index": 0}]]
+    },
+    "Get Help": {
+      "main": [[{"node": "Send Help", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "active": false
+}
